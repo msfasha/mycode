@@ -1,0 +1,89 @@
+version: '3.8'
+
+services:
+  hydrotwinjs:
+    build: .
+    container_name: hydrotwinjs-app
+    ports:
+      - "3001:3001"  # API server
+      - "3002:3002"  # WebSocket server
+      - "3000:3000"  # Frontend (if served by backend)
+    environment:
+      - NODE_ENV=production
+      - PORT=3001
+      - WS_PORT=3002
+      - DB_PATH=/app/data/simulation.db
+      - MODEL_INP_PATH=/app/models/network.inp
+      - MODEL_RPT_PATH=/app/models/report.rpt
+      - MODEL_OUT_PATH=/app/models/output.bin
+      - SENSOR_API_URL=http://localhost:3001/api/sensors
+      - SENSOR_UPDATE_INTERVAL=30000
+    volumes:
+      - ./data:/app/data
+      - ./models:/app/models
+      - ./logs:/app/logs
+    restart: unless-stopped
+    healthcheck:
+      test: ["CMD", "curl", "-f", "http://localhost:3001/api/simulation/status"]
+      interval: 30s
+      timeout: 10s
+      retries: 3
+      start_period: 40s
+    networks:
+      - hydrotwinjs-network
+
+  # Optional: PostgreSQL database for production
+  postgres:
+    image: postgres:15-alpine
+    container_name: hydrotwinjs-db
+    environment:
+      - POSTGRES_DB=hydrotwinjs
+      - POSTGRES_USER=hydrotwinjs
+      - POSTGRES_PASSWORD=hydrotwinjs_password
+    volumes:
+      - postgres_data:/var/lib/postgresql/data
+      - ./init.sql:/docker-entrypoint-initdb.d/init.sql
+    ports:
+      - "5432:5432"
+    restart: unless-stopped
+    networks:
+      - hydrotwinjs-network
+
+  # Optional: Redis for caching and session storage
+  redis:
+    image: redis:7-alpine
+    container_name: hydrotwinjs-redis
+    ports:
+      - "6379:6379"
+    volumes:
+      - redis_data:/data
+    restart: unless-stopped
+    networks:
+      - hydrotwinjs-network
+
+  # Optional: Nginx reverse proxy
+  nginx:
+    image: nginx:alpine
+    container_name: hydrotwinjs-nginx
+    ports:
+      - "80:80"
+      - "443:443"
+    volumes:
+      - ./nginx.conf:/etc/nginx/nginx.conf
+      - ./ssl:/etc/nginx/ssl
+    depends_on:
+      - hydrotwinjs
+    restart: unless-stopped
+    networks:
+      - hydrotwinjs-network
+
+volumes:
+  postgres_data:
+  redis_data:
+
+networks:
+  hydrotwinjs-network:
+    driver: bridge
+
+
+

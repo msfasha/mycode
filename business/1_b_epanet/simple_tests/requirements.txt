@@ -1,0 +1,28 @@
+# Python dependencies for Water Network Monitoring System
+
+# Core EPANET library
+epyt>=1.0.7
+
+# Dashboard and visualization
+dash>=2.14.0
+plotly>=5.17.0
+streamlit>=1.50.0
+
+# Data processing
+numpy>=1.24.0
+pandas>=2.0.0
+networkx>=3.0
+matplotlib>=3.7.0
+scipy>=1.11.0
+
+# Optional: Database support (for future enhancement)
+# psycopg2-binary>=2.9.9  # PostgreSQL/TimescaleDB
+# influxdb-client>=1.38.0  # InfluxDB
+
+# Optional: Web API (for future enhancement)
+# flask>=3.0.0
+# flask-cors>=4.0.0
+
+# Optional: Real SCADA protocols (for future enhancement)
+# opcua>=0.98.13  # OPC-UA protocol
+# pymodbus>=3.5.0  # Modbus protocol

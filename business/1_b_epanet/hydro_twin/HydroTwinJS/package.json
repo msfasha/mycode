@@ -1,0 +1,36 @@
+{
+  "name": "hydrotwin-js",
+  "version": "1.0.0",
+  "description": "Real-time EPANET web dashboard with live sensor data integration",
+  "main": "server/index.js",
+  "scripts": {
+    "dev": "concurrently \"npm run server\" \"npm run client\"",
+    "server": "nodemon server/index.js",
+    "client": "cd client && npm start",
+    "build": "cd client && npm run build",
+    "start": "node server/index.js",
+    "install-all": "npm install && cd client && npm install"
+  },
+  "keywords": ["epanet", "water", "simulation", "real-time", "dashboard", "scada"],
+  "author": "HydroTwin Team",
+  "license": "MIT",
+  "dependencies": {
+    "express": "^4.18.2",
+    "cors": "^2.8.5",
+    "ws": "^8.14.2",
+    "epanet-js": "^0.1.0",
+    "node-cron": "^3.0.3",
+    "axios": "^1.6.0",
+    "sqlite3": "^5.1.6",
+    "dotenv": "^16.3.1",
+    "helmet": "^7.1.0",
+    "compression": "^1.7.4"
+  },
+  "devDependencies": {
+    "nodemon": "^3.0.1",
+    "concurrently": "^8.2.2"
+  }
+}
+
+
+

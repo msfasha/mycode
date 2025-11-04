@@ -1,0 +1,258 @@
+{% extends "base.html" %}
+
+{% block title %}Real-time Monitor - HydroTwin{% endblock %}
+
+{% block content %}
+<div class="row">
+    <div class="col-12">
+        <h1 class="mb-4">
+            <i class="fas fa-chart-line text-primary"></i> Real-time Monitor
+        </h1>
+    </div>
+</div>
+
+<div class="row">
+    <div class="col-md-6">
+        <div class="card">
+            <div class="card-header">
+                <h5><i class="fas fa-tachometer-alt"></i> System Metrics</h5>
+            </div>
+            <div class="card-body">
+                <div class="row">
+                    <div class="col-6">
+                        <div class="text-center">
+                            <h3 class="text-primary" id="avg-pressure">--</h3>
+                            <p class="text-muted">Avg Pressure (m)</p>
+                        </div>
+                    </div>
+                    <div class="col-6">
+                        <div class="text-center">
+                            <h3 class="text-success" id="total-flow">--</h3>
+                            <p class="text-muted">Total Flow (L/s)</p>
+                        </div>
+                    </div>
+                </div>
+                <div class="row mt-3">
+                    <div class="col-6">
+                        <div class="text-center">
+                            <h3 class="text-warning" id="min-pressure">--</h3>
+                            <p class="text-muted">Min Pressure (m)</p>
+                        </div>
+                    </div>
+                    <div class="col-6">
+                        <div class="text-center">
+                            <h3 class="text-info" id="max-pressure">--</h3>
+                            <p class="text-muted">Max Pressure (m)</p>
+                        </div>
+                    </div>
+                </div>
+            </div>
+        </div>
+    </div>
+    
+    <div class="col-md-6">
+        <div class="card">
+            <div class="card-header">
+                <h5><i class="fas fa-info-circle"></i> Simulation Status</h5>
+            </div>
+            <div class="card-body">
+                <div id="monitor-status">
+                    <p><i class="fas fa-pause-circle text-secondary"></i> No active simulation</p>
+                </div>
+                <div class="progress mt-3" style="display: none;" id="monitor-progress-container">
+                    <div class="progress-bar" role="progressbar" id="monitor-progress-bar" style="width: 0%"></div>
+                </div>
+                <div class="mt-3">
+                    <button class="btn btn-primary" id="start-monitor-btn">
+                        <i class="fas fa-play"></i> Start Monitoring
+                    </button>
+                    <button class="btn btn-danger" id="stop-monitor-btn" style="display: none;">
+                        <i class="fas fa-stop"></i> Stop Monitoring
+                    </button>
+                </div>
+            </div>
+        </div>
+    </div>
+</div>
+
+<div class="row mt-4">
+    <div class="col-12">
+        <div class="card">
+            <div class="card-header">
+                <h5><i class="fas fa-chart-area"></i> Live Charts</h5>
+            </div>
+            <div class="card-body">
+                <div id="live-charts">
+                    <p class="text-muted">Charts will appear here when monitoring is active.</p>
+                </div>
+            </div>
+        </div>
+    </div>
+</div>
+
+<div class="row mt-4">
+    <div class="col-md-6">
+        <div class="card">
+            <div class="card-header">
+                <h5><i class="fas fa-bell"></i> Alerts</h5>
+            </div>
+            <div class="card-body">
+                <div id="alerts-container">
+                    <p class="text-muted">No alerts at this time.</p>
+                </div>
+            </div>
+        </div>
+    </div>
+    
+    <div class="col-md-6">
+        <div class="card">
+            <div class="card-header">
+                <h5><i class="fas fa-cogs"></i> Controls</h5>
+            </div>
+            <div class="card-body">
+                <div id="controls-container">
+                    <p class="text-muted">Control actions will appear here during simulation.</p>
+                </div>
+            </div>
+        </div>
+    </div>
+</div>
+{% endblock %}
+
+{% block scripts %}
+<script>
+document.addEventListener('DOMContentLoaded', function() {
+    const startBtn = document.getElementById('start-monitor-btn');
+    const stopBtn = document.getElementById('stop-monitor-btn');
+    const statusDiv = document.getElementById('monitor-status');
+    const progressContainer = document.getElementById('monitor-progress-container');
+    const progressBar = document.getElementById('monitor-progress-bar');
+    const chartsDiv = document.getElementById('live-charts');
+    const alertsDiv = document.getElementById('alerts-container');
+    const controlsDiv = document.getElementById('controls-container');
+    
+    let monitoringInterval;
+    let isMonitoring = false;
+    
+    // Start monitoring
+    startBtn.addEventListener('click', function() {
+        isMonitoring = true;
+        startBtn.style.display = 'none';
+        stopBtn.style.display = 'block';
+        progressContainer.style.display = 'block';
+        startMonitoring();
+    });
+    
+    // Stop monitoring
+    stopBtn.addEventListener('click', function() {
+        isMonitoring = false;
+        startBtn.style.display = 'block';
+        stopBtn.style.display = 'none';
+        progressContainer.style.display = 'none';
+        clearInterval(monitoringInterval);
+        statusDiv.innerHTML = '<p><i class="fas fa-pause-circle text-secondary"></i> Monitoring stopped</p>';
+    });
+    
+    function startMonitoring() {
+        statusDiv.innerHTML = '<p><i class="fas fa-play-circle text-success"></i> Monitoring active</p>';
+        
+        monitoringInterval = setInterval(function() {
+            if (!isMonitoring) return;
+            
+            fetch('/api/simulation-status')
+                .then(response => response.json())
+                .then(status => {
+                    updateMetrics(status);
+                    updateProgress(status);
+                    updateCharts(status);
+                    updateAlerts(status);
+                    updateControls(status);
+                })
+                .catch(error => {
+                    console.error('Monitoring error:', error);
+                });
+        }, 2000); // Update every 2 seconds
+    }
+    
+    function updateMetrics(status) {
+        if (status.results && status.results.simulation_results) {
+            const results = status.results.simulation_results;
+            if (results.length > 0) {
+                const latest = results[results.length - 1];
+                document.getElementById('avg-pressure').textContent = latest.avg_pressure.toFixed(2);
+                document.getElementById('total-flow').textContent = latest.total_flow.toFixed(2);
+                document.getElementById('min-pressure').textContent = latest.min_pressure.toFixed(2);
+                document.getElementById('max-pressure').textContent = latest.max_pressure.toFixed(2);
+            }
+        }
+    }
+    
+    function updateProgress(status) {
+        if (status.running) {
+            progressBar.style.width = status.progress + '%';
+            statusDiv.innerHTML = `<p><i class="fas fa-play-circle text-success"></i> Simulation running (${status.progress}%)</p>`;
+        } else if (status.error) {
+            statusDiv.innerHTML = `<p><i class="fas fa-exclamation-circle text-danger"></i> Error: ${status.error}</p>`;
+        } else {
+            statusDiv.innerHTML = '<p><i class="fas fa-check-circle text-success"></i> Simulation completed</p>';
+        }
+    }
+    
+    function updateCharts(status) {
+        if (status.results && status.results.simulation_results) {
+            // Generate live charts here
+            chartsDiv.innerHTML = '<p class="text-success"><i class="fas fa-chart-line"></i> Live data available</p>';
+        }
+    }
+    
+    function updateAlerts(status) {
+        // Check for low pressure alerts
+        if (status.results && status.results.simulation_results) {
+            const results = status.results.simulation_results;
+            if (results.length > 0) {
+                const latest = results[results.length - 1];
+                let alerts = [];
+                
+                if (latest.min_pressure < 20) {
+                    alerts.push('<div class="alert alert-warning"><i class="fas fa-exclamation-triangle"></i> Low pressure detected!</div>');
+                }
+                
+                if (latest.avg_pressure < 30) {
+                    alerts.push('<div class="alert alert-info"><i class="fas fa-info-circle"></i> Average pressure below normal</div>');
+                }
+                
+                if (alerts.length > 0) {
+                    alertsDiv.innerHTML = alerts.join('');
+                } else {
+                    alertsDiv.innerHTML = '<p class="text-success"><i class="fas fa-check-circle"></i> All systems normal</p>';
+                }
+            }
+        }
+    }
+    
+    function updateControls(status) {
+        if (status.results && status.results.simulation_results) {
+            const results = status.results.simulation_results;
+            if (results.length > 0) {
+                const latest = results[results.length - 1];
+                let controls = [];
+                
+                if (latest.min_pressure < 20) {
+                    controls.push('<div class="alert alert-primary"><i class="fas fa-cog"></i> Pressure boost recommended</div>');
+                }
+                
+                if (latest.total_flow > 10000) {
+                    controls.push('<div class="alert alert-info"><i class="fas fa-cog"></i> High flow detected - check system</div>');
+                }
+                
+                if (controls.length > 0) {
+                    controlsDiv.innerHTML = controls.join('');
+                } else {
+                    controlsDiv.innerHTML = '<p class="text-success"><i class="fas fa-check-circle"></i> No control actions needed</p>';
+                }
+            }
+        }
+    }
+});
+</script>
+{% endblock %}

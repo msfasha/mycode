@@ -1,0 +1,396 @@
+{% extends "base.html" %}
+
+{% block title %}Simulations - HydroTwin{% endblock %}
+
+{% block content %}
+<div class="row">
+    <div class="col-12">
+        <h1 class="mb-4">
+            <i class="fas fa-play-circle text-primary"></i> EPANET Simulations
+        </h1>
+    </div>
+</div>
+
+<div class="row">
+    <div class="col-md-4">
+        <div class="card">
+            <div class="card-header">
+                <h5><i class="fas fa-cog"></i> Simulation Configuration</h5>
+            </div>
+            <div class="card-body">
+                <form id="simulation-form">
+                    <div class="mb-3">
+                        <label for="network-file" class="form-label">Network File</label>
+                        <select class="form-select" id="network-file" name="network_file">
+                            <option value="">Loading...</option>
+                        </select>
+                    </div>
+                    
+                    <div class="mb-3">
+                        <label for="simulation-type" class="form-label">Simulation Type</label>
+                        <select class="form-select" id="simulation-type" name="type">
+                            <option value="simple">Simple Real-time</option>
+                            <option value="advanced">Advanced with Control Logic</option>
+                            <option value="scada">SCADA Integration</option>
+                            <option value="comprehensive">Comprehensive Simulation</option>
+                        </select>
+                        <div class="form-text">
+                            <small>
+                                <strong>Simple:</strong> Basic step-by-step simulation<br>
+                                <strong>Advanced:</strong> With control logic and alarms<br>
+                                <strong>SCADA:</strong> Database logging and real-time data<br>
+                                <strong>Comprehensive:</strong> Full-featured simulation
+                            </small>
+                        </div>
+                    </div>
+                    
+                    <div class="mb-3">
+                        <label for="duration" class="form-label">Duration (hours)</label>
+                        <input type="number" class="form-control" id="duration" name="duration" value="1" min="1" max="24">
+                    </div>
+                    
+                    <div class="d-grid">
+                        <button type="submit" class="btn btn-primary" id="start-btn">
+                            <i class="fas fa-play"></i> Start Simulation
+                        </button>
+                        <button type="button" class="btn btn-danger mt-2" id="stop-btn" style="display: none;">
+                            <i class="fas fa-stop"></i> Stop Simulation
+                        </button>
+                    </div>
+                </form>
+            </div>
+        </div>
+        
+        <div class="card mt-3">
+            <div class="card-header">
+                <h5><i class="fas fa-info-circle"></i> Simulation Status</h5>
+            </div>
+            <div class="card-body">
+                <div id="simulation-status">
+                    <p><i class="fas fa-pause-circle text-secondary"></i> No simulation running</p>
+                </div>
+                <div class="progress mt-2" style="display: none;" id="progress-container">
+                    <div class="progress-bar" role="progressbar" id="progress-bar" style="width: 0%"></div>
+                </div>
+            </div>
+        </div>
+        
+        <div class="card mt-3">
+            <div class="card-header">
+                <h5><i class="fas fa-download"></i> Export Results</h5>
+            </div>
+            <div class="card-body">
+                <button class="btn btn-outline-primary" id="download-btn" disabled>
+                    <i class="fas fa-download"></i> Download Results
+                </button>
+            </div>
+        </div>
+    </div>
+    
+    <div class="col-md-8">
+        <div class="card">
+            <div class="card-header">
+                <h5><i class="fas fa-chart-line"></i> Simulation Results</h5>
+            </div>
+            <div class="card-body">
+                <div id="results-container">
+                    <p class="text-muted">Start a simulation to see results here.</p>
+                </div>
+            </div>
+        </div>
+        
+        <div class="card mt-3">
+            <div class="card-header">
+                <h5><i class="fas fa-image"></i> Network Visualizations</h5>
+            </div>
+            <div class="card-body">
+                <div class="mb-3">
+                    <label for="viz-type" class="form-label">Visualization Type</label>
+                    <select class="form-select" id="viz-type">
+                        <option value="comprehensive">Comprehensive Analysis</option>
+                        <option value="topology">Network Topology</option>
+                        <option value="pressure">Pressure Distribution</option>
+                        <option value="flow">Flow Patterns</option>
+                        <option value="statistics">Network Statistics</option>
+                    </select>
+                </div>
+                <div class="d-grid gap-2">
+                    <button class="btn btn-outline-primary" id="show-network-viz">
+                        <i class="fas fa-eye"></i> Show Network Visualization
+                    </button>
+                    <button class="btn btn-outline-success" id="save-network-viz">
+                        <i class="fas fa-download"></i> Save Visualization
+                    </button>
+                </div>
+                <div id="network-viz-container" class="mt-3">
+                    <p class="text-muted">Select a network file and visualization type to see the network.</p>
+                </div>
+            </div>
+        </div>
+        
+        <div class="card mt-3">
+            <div class="card-header">
+                <h5><i class="fas fa-chart-line"></i> Simulation Plots</h5>
+            </div>
+            <div class="card-body">
+                <div id="plots-container">
+                    <p class="text-muted">Plots will appear here after simulation completion.</p>
+                </div>
+            </div>
+        </div>
+    </div>
+</div>
+{% endblock %}
+
+{% block scripts %}
+<script>
+document.addEventListener('DOMContentLoaded', function() {
+    const form = document.getElementById('simulation-form');
+    const startBtn = document.getElementById('start-btn');
+    const stopBtn = document.getElementById('stop-btn');
+    const downloadBtn = document.getElementById('download-btn');
+    const statusDiv = document.getElementById('simulation-status');
+    const progressContainer = document.getElementById('progress-container');
+    const progressBar = document.getElementById('progress-bar');
+    const resultsContainer = document.getElementById('results-container');
+    const plotsContainer = document.getElementById('plots-container');
+    const networkVizContainer = document.getElementById('network-viz-container');
+    const showNetworkVizBtn = document.getElementById('show-network-viz');
+    const saveNetworkVizBtn = document.getElementById('save-network-viz');
+    const vizTypeSelect = document.getElementById('viz-type');
+    
+    let statusInterval;
+    
+    // Load network files
+    fetch('/api/network-files')
+        .then(response => response.json())
+        .then(data => {
+            const select = document.getElementById('network-file');
+            select.innerHTML = '';
+            data.files.forEach(file => {
+                const option = document.createElement('option');
+                option.value = `water-networks/${file}`;
+                option.textContent = file;
+                select.appendChild(option);
+            });
+        });
+    
+    // Form submission
+    form.addEventListener('submit', function(e) {
+        e.preventDefault();
+        
+        const formData = new FormData(form);
+        const data = {
+            type: formData.get('type'),
+            network_file: formData.get('network_file'),
+            duration: parseInt(formData.get('duration'))
+        };
+        
+        if (!data.network_file) {
+            alert('Please select a network file');
+            return;
+        }
+        
+        fetch('/api/run-simulation', {
+            method: 'POST',
+            headers: {
+                'Content-Type': 'application/json',
+            },
+            body: JSON.stringify(data)
+        })
+        .then(response => response.json())
+        .then(result => {
+            if (result.error) {
+                alert('Error: ' + result.error);
+            } else {
+                startBtn.style.display = 'none';
+                stopBtn.style.display = 'block';
+                progressContainer.style.display = 'block';
+                downloadBtn.disabled = true;
+                startStatusMonitoring();
+            }
+        })
+        .catch(error => {
+            alert('Error starting simulation: ' + error.message);
+        });
+    });
+    
+    // Stop simulation
+    stopBtn.addEventListener('click', function() {
+        fetch('/api/stop-simulation', {
+            method: 'POST'
+        })
+        .then(response => response.json())
+        .then(result => {
+            startBtn.style.display = 'block';
+            stopBtn.style.display = 'none';
+            progressContainer.style.display = 'none';
+            clearInterval(statusInterval);
+        });
+    });
+    
+    // Download results
+    downloadBtn.addEventListener('click', function() {
+        window.location.href = '/api/download-results';
+    });
+    
+    // Show network visualization
+    showNetworkVizBtn.addEventListener('click', function() {
+        const networkFile = document.getElementById('network-file').value;
+        const vizType = vizTypeSelect.value;
+        
+        if (!networkFile) {
+            alert('Please select a network file first');
+            return;
+        }
+        
+        const filename = networkFile.split('/').pop();
+        showNetworkVizBtn.disabled = true;
+        showNetworkVizBtn.innerHTML = '<i class="fas fa-spinner fa-spin"></i> Loading...';
+        
+        fetch(`/api/network-visualization/${filename}?type=${vizType}`)
+            .then(response => response.json())
+            .then(data => {
+                if (data.error) {
+                    networkVizContainer.innerHTML = `<p class="text-danger">Error: ${data.error}</p>`;
+                } else {
+                    networkVizContainer.innerHTML = `
+                        <h6>${vizType.charAt(0).toUpperCase() + vizType.slice(1)} Visualization:</h6>
+                        <img src="data:image/png;base64,${data.image}" class="img-fluid" alt="Network Visualization" style="max-width: 100%; height: auto;">
+                    `;
+                }
+            })
+            .catch(error => {
+                networkVizContainer.innerHTML = `<p class="text-danger">Error loading visualization: ${error.message}</p>`;
+            })
+            .finally(() => {
+                showNetworkVizBtn.disabled = false;
+                showNetworkVizBtn.innerHTML = '<i class="fas fa-eye"></i> Show Network Visualization';
+            });
+    });
+    
+    // Save network visualization
+    saveNetworkVizBtn.addEventListener('click', function() {
+        const networkFile = document.getElementById('network-file').value;
+        const vizType = vizTypeSelect.value;
+        
+        if (!networkFile) {
+            alert('Please select a network file first');
+            return;
+        }
+        
+        const filename = networkFile.split('/').pop();
+        saveNetworkVizBtn.disabled = true;
+        saveNetworkVizBtn.innerHTML = '<i class="fas fa-spinner fa-spin"></i> Saving...';
+        
+        fetch(`/api/network-visualization-save/${filename}?type=${vizType}`)
+            .then(response => response.json())
+            .then(data => {
+                if (data.error) {
+                    alert('Error: ' + data.error);
+                } else {
+                    alert('Visualization saved successfully!');
+                    // Create download link
+                    const downloadLink = document.createElement('a');
+                    downloadLink.href = data.download_url;
+                    downloadLink.download = data.filename;
+                    downloadLink.click();
+                }
+            })
+            .catch(error => {
+                alert('Error saving visualization: ' + error.message);
+            })
+            .finally(() => {
+                saveNetworkVizBtn.disabled = false;
+                saveNetworkVizBtn.innerHTML = '<i class="fas fa-download"></i> Save Visualization';
+            });
+    });
+    
+    function startStatusMonitoring() {
+        statusInterval = setInterval(function() {
+            fetch('/api/simulation-status')
+                .then(response => response.json())
+                .then(status => {
+                    if (status.running) {
+                        statusDiv.innerHTML = `<p><i class="fas fa-play-circle text-success"></i> Simulation running (${status.progress}%)</p>`;
+                        progressBar.style.width = status.progress + '%';
+                    } else {
+                        if (status.error) {
+                            statusDiv.innerHTML = `<p><i class="fas fa-exclamation-circle text-danger"></i> Error: ${status.error}</p>`;
+                        } else {
+                            statusDiv.innerHTML = `<p><i class="fas fa-check-circle text-success"></i> Simulation completed</p>`;
+                        }
+                        progressBar.style.width = '100%';
+                        startBtn.style.display = 'block';
+                        stopBtn.style.display = 'none';
+                        progressContainer.style.display = 'none';
+                        downloadBtn.disabled = false;
+                        clearInterval(statusInterval);
+                        loadResults();
+                    }
+                });
+        }, 1000);
+    }
+    
+    function loadResults() {
+        fetch('/api/simulation-results')
+            .then(response => response.json())
+            .then(results => {
+                if (results.error) {
+                    resultsContainer.innerHTML = `<p class="text-danger">Error: ${results.error}</p>`;
+                } else {
+                    displayResults(results);
+                    generatePlots();
+                }
+            });
+    }
+    
+    function displayResults(results) {
+        let html = '<h6>Simulation Results:</h6>';
+        
+        if (results.network_info) {
+            html += `<p><strong>Network:</strong> ${results.network_info.nodes} nodes, ${results.network_info.links} links</p>`;
+        }
+        
+        if (results.simulation_results) {
+            const lastResult = results.simulation_results[results.simulation_results.length - 1];
+            html += `<p><strong>Final Results:</strong></p>`;
+            html += `<ul>`;
+            html += `<li>Average Pressure: ${lastResult.avg_pressure.toFixed(2)} m</li>`;
+            html += `<li>Min Pressure: ${lastResult.min_pressure.toFixed(2)} m</li>`;
+            html += `<li>Max Pressure: ${lastResult.max_pressure.toFixed(2)} m</li>`;
+            html += `<li>Total Flow: ${lastResult.total_flow.toFixed(2)} L/s</li>`;
+            html += `</ul>`;
+        }
+        
+        resultsContainer.innerHTML = html;
+    }
+    
+    function generatePlots() {
+        // Generate pressure plot
+        fetch('/api/generate-plot?type=pressure')
+            .then(response => response.json())
+            .then(data => {
+                if (data.plot) {
+                    plotsContainer.innerHTML = `
+                        <h6>Pressure Over Time:</h6>
+                        <img src="data:image/png;base64,${data.plot}" class="img-fluid" alt="Pressure Plot">
+                    `;
+                }
+            });
+        
+        // Generate flow plot
+        fetch('/api/generate-plot?type=flow')
+            .then(response => response.json())
+            .then(data => {
+                if (data.plot) {
+                    plotsContainer.innerHTML += `
+                        <h6 class="mt-3">Flow Over Time:</h6>
+                        <img src="data:image/png;base64,${data.plot}" class="img-fluid" alt="Flow Plot">
+                    `;
+                }
+            });
+    }
+});
+</script>
+{% endblock %}
