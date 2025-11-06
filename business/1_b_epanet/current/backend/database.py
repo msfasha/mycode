@@ -272,6 +272,17 @@ async def get_anomalies(network_id: str, start_time: datetime = None, end_time: 
             for row in rows
         ]
 
+async def check_connection() -> bool:
+    """Check if database connection is available."""
+    try:
+        pool = await get_pool()
+        async with pool.acquire() as conn:
+            await conn.fetchval('SELECT 1')
+        return True
+    except Exception as e:
+        print(f"Database connection check failed: {e}")
+        return False
+
 async def close_db():
     """Close database pool."""
     global _pool

@@ -31,44 +31,71 @@ async def start_simulation(request: StartSimulationRequest):
     if network_id not in baselines_storage:
         raise HTTPException(status_code=404, detail="Baseline not established")
     
-    # Store network in database if not already stored
-    network_data = networks_storage[network_id]
-    await database.store_network(
-        network_id,
-        network_data['name'],
-        network_data['file_path']
-    )
+    # Check database connection (non-fatal, simulation can run without it)
+    db_available = await database.check_connection()
+    db_warning = None
+    if not db_available:
+        db_warning = "Database is not available. Simulation will run but data will not be stored."
     
-    # Store baseline in database
+    # Try to store network in database (non-fatal)
+    network_data = networks_storage[network_id]
+    try:
+        await database.store_network(
+            network_id,
+            network_data['name'],
+            network_data['file_path']
+        )
+    except Exception as db_error:
+        db_warning = f"Database storage failed: {db_error}. Simulation will continue without database."
+    
+    # Try to store baseline in database (non-fatal)
     baseline = baselines_storage[network_id]
-    await database.store_baseline(
-        network_id,
-        baseline['pressures'],
-        baseline['flows'],
-        baseline['tank_levels']
-    )
+    try:
+        await database.store_baseline(
+            network_id,
+            baseline['pressures'],
+            baseline['flows'],
+            baseline['tank_levels']
+        )
+    except Exception as db_error:
+        if not db_warning:
+            db_warning = f"Database storage failed: {db_error}. Simulation will continue without database."
     
     # Get network file path
     network_file = network_data['file_path']
     interval_minutes = request.interval_minutes or 5
     
+    # Clear any previous errors for this simulation
+    simulation_runner.clear_errors(network_id)
+    
     # Start simulation with monitoring
-    success = await simulation_runner.start_simulation(
-        network_id, 
-        baseline, 
-        network_file,
-        interval_minutes=interval_minutes
-    )
+    try:
+        success = await simulation_runner.start_simulation(
+            network_id, 
+            baseline, 
+            network_file,
+            interval_minutes=interval_minutes
+        )
+    except Exception as init_error:
+        raise HTTPException(
+            status_code=500,
+            detail=f"Failed to start simulation: {str(init_error)}"
+        )
     
     if not success:
         raise HTTPException(status_code=400, detail="Simulation already running")
     
-    return {
+    response = {
         "success": True,
         "network_id": network_id,
         "interval_minutes": interval_minutes,
         "message": f"Simulation started with monitoring. Comparing expected vs actual every {interval_minutes} minutes."
     }
+    
+    if db_warning:
+        response["warning"] = db_warning
+    
+    return response
 
 
 @router.post("/stop")
@@ -92,10 +119,50 @@ async def stop_simulation(request: StopSimulationRequest):
 async def get_simulation_status(network_id: str):
     """Get simulation status for a network."""
     is_running = simulation_runner.is_running(network_id)
+    errors = simulation_runner.get_errors(network_id)
+    
+    # Get recent errors (last 10)
+    recent_errors = errors[-10:] if errors else []
+    
+    # Count errors by type
+    fatal_count = sum(1 for e in errors if e.get('fatal', False))
+    recoverable_count = sum(1 for e in errors if not e.get('fatal', False))
     
     return {
         "network_id": network_id,
-        "running": is_running
+        "running": is_running,
+        "errors": {
+            "total": len(errors),
+            "fatal": fatal_count,
+            "recoverable": recoverable_count,
+            "recent": recent_errors
+        }
+    }
+
+
+@router.get("/errors/{network_id}")
+async def get_simulation_errors(
+    network_id: str,
+    limit: int = 50,
+    fatal_only: bool = False
+):
+    """Get errors for a simulation."""
+    if network_id not in networks_storage:
+        raise HTTPException(status_code=404, detail="Network not found")
+    
+    errors = simulation_runner.get_errors(network_id)
+    
+    # Filter by fatal if requested
+    if fatal_only:
+        errors = [e for e in errors if e.get('fatal', False)]
+    
+    # Limit results
+    errors = errors[-limit:] if len(errors) > limit else errors
+    
+    return {
+        "network_id": network_id,
+        "count": len(errors),
+        "errors": errors
     }
 
 

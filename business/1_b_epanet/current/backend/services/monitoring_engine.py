@@ -33,11 +33,42 @@ class MonitoringEngine:
         if self.d:
             self.d.unload()
         
-        # Load network
-        if not Path(self.network_file).exists():
-            raise FileNotFoundError(f"Network file not found: {self.network_file}")
+        # Validate network file exists and is readable
+        network_path = Path(self.network_file)
+        if not network_path.exists():
+            raise FileNotFoundError(
+                f"Network file not found: {self.network_file}. "
+                f"Please ensure the file was uploaded correctly."
+            )
         
-        self.d = epanet(self.network_file)
+        if not network_path.is_file():
+            raise ValueError(
+                f"Network path is not a file: {self.network_file}"
+            )
+        
+        # Validate baseline data
+        if not self.baseline_data:
+            raise ValueError(
+                "Baseline data is required but not provided. "
+                "Please establish baseline before starting simulation."
+            )
+        
+        required_keys = ['pressures', 'flows', 'tank_levels']
+        missing_keys = [key for key in required_keys if key not in self.baseline_data]
+        if missing_keys:
+            raise ValueError(
+                f"Baseline data is missing required keys: {missing_keys}. "
+                "Please establish baseline with all required data."
+            )
+        
+        # Load network with error handling
+        try:
+            self.d = epanet(str(network_path))
+        except Exception as e:
+            raise RuntimeError(
+                f"Failed to load EPANET network file '{self.network_file}': {str(e)}. "
+                "Please check that the file is a valid EPANET .inp file."
+            ) from e
         
         # Create 24-hour diurnal pattern
         pattern_multipliers = [get_diurnal_multiplier(float(h)) for h in range(24)]
@@ -85,20 +116,35 @@ class MonitoringEngine:
                         pass
         
         # Initialize hydraulic analysis for step-by-step simulation
+        initialization_success = False
+        init_error = None
+        
         try:
             # Try to open and initialize hydraulic analysis
             self.d.openHydraulicAnalysis()
             self.d.initializeHydraulicAnalysis(0)  # Initialize for extended period
-        except:
+            initialization_success = True
+        except Exception as e1:
+            init_error = str(e1)
             try:
                 # Alternative: try without parameter
                 self.d.initializeHydraulicAnalysis()
-            except:
-                # Fallback: just solve hydraulics (will still work but not step-by-step)
+                initialization_success = True
+            except Exception as e2:
+                init_error = str(e2)
                 try:
+                    # Fallback: just solve hydraulics (will still work but not step-by-step)
                     self.d.solveCompleteHydraulics()
-                except:
-                    pass
+                    initialization_success = True
+                    print(f"Warning: Using fallback hydraulic initialization (step-by-step may not work)")
+                except Exception as e3:
+                    init_error = str(e3)
+        
+        if not initialization_success:
+            raise RuntimeError(
+                f"Failed to initialize EPANET hydraulic analysis: {init_error}. "
+                "The network file may be invalid or EPANET toolkit may have issues."
+            )
         
         # Update tank levels from tracked SCADA data if available
         self._update_tank_levels_from_tracked()

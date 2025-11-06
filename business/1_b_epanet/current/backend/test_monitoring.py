@@ -1,4 +1,29 @@
-"""Test monitoring engine with Extended Period Simulation."""
+
+"""
+Test monitoring engine with Extended Period Simulation.
+
+This file is designed to verify that the MonitoringEngine class and associated
+monitoring workflow for SCADA and EPANET Extended Period Simulations function as expected. 
+
+Core functionalities tested include:
+- Database connectivity and initialization
+- Loading and parsing EPANET network files
+- Establishing hydraulic baselines using BaselineEngine
+- Running EPANET hydraulic simulation with real-world time-of-day patterns
+- Simulating SCADA sensor data for pressures, flows, and tank levels
+- Comparing simulated and expected data for monitoring and anomaly detection
+- Storing and retrieving sensor readings and anomalies from the database
+
+The tests in this script help ensure the monitoring backend is correctly configured
+to:
+    - Set up and run EPS using network files (.inp)
+    - Generate, store, and retrieve synthetic and expected sensor data
+    - Perform monitoring and anomaly detection routines needed by the application
+
+Intended for manual and CI test use during backend development of the
+water network monitoring and management system.
+"""
+
 import asyncio
 import sys
 from pathlib import Path

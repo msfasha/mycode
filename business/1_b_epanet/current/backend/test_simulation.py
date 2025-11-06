@@ -1,4 +1,25 @@
-"""Simple test script to verify simulation works."""
+"""
+test_simulation.py
+Simple test script to verify simulation works.
+This script provides a simple smoke test for the simulation system of the backend water network monitoring application.
+
+Purpose:
+- To verify that the SimulationRunner service, SCADA simulator, and supporting database functions work properly together.
+- To serve as a functional demonstration of running a simulation with basic synthetic test data and persisting the results.
+- To help developers quickly check that the simulation and monitoring infrastructure is operational during development or deployment.
+
+What this file does:
+- Initializes the backend database required by the simulation system.
+- Constructs a test set of baseline data for use in simulation (pressures, flows, tank levels).
+- Uses the SCADASimulator to generate synthetic sensor data for the test network.
+- Stores the generated sensor readings in the database.
+- Confirms that data storage was successful by retrieving and printing the stored readings.
+- Can be run as a standalone async test script to validate the backend simulation system.
+
+This file is intended for debugging, development, and CI purposes. For more advanced or comprehensive monitoring and anomaly detection tests, see `test_monitoring.py`.
+"""
+
+
 import asyncio
 import sys
 from pathlib import Path
