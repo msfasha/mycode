@@ -1,38 +1,67 @@
-"""FastAPI application entry point."""
-from fastapi import FastAPI
-from fastapi.middleware.cors import CORSMiddleware
+"""
+Main FastAPI application.
+
+Sets up the FastAPI app with database connection, CORS, and routers.
+"""
+import logging
 from contextlib import asynccontextmanager
 
-from api import network, scada, simulation
-import database
+from fastapi import FastAPI
+from fastapi.middleware.cors import CORSMiddleware
+
+from database import close_db, init_db
+from routers import network, scada_simulator
+
+# Configure logging
+logging.basicConfig(
+    level=logging.INFO,
+    format="%(asctime)s - %(name)s - %(levelname)s - %(message)s",
+)
+logger = logging.getLogger(__name__)
+
 
 @asynccontextmanager
 async def lifespan(app: FastAPI):
-    """Lifecycle events."""
-    # Startup: Initialize database
+    """
+    Lifespan context manager for startup and shutdown events.
+    
+    Initializes database on startup and closes connections on shutdown.
+    """
+    # Startup
+    logger.info("Starting application...")
     try:
-        await database.init_db()
-        print("Database initialized successfully")
+        await init_db()
+        logger.info("Database initialized")
     except Exception as e:
-        print(f"Warning: Could not initialize database: {e}")
-        print("Database operations will fail until database is available")
-    
-    yield
-    
-    # Shutdown: Close database connections
-    await database.close_db()
+        logger.error(f"Failed to initialize database: {e}", exc_info=True)
+        raise
 
+    yield
+
+    # Shutdown
+    logger.info("Shutting down application...")
+    try:
+        await close_db()
+        logger.info("Database connections closed")
+    except Exception as e:
+        logger.error(f"Error closing database: {e}", exc_info=True)
+
+
+# Create FastAPI app
 app = FastAPI(
-    title="RTDWMS Backend",
-    description="Real-Time Dynamic Water Network Monitoring System - Backend API",
+    title="SCADA Simulator API",
+    description="API for SCADA simulator and monitoring system",
     version="1.0.0",
-    lifespan=lifespan
+    lifespan=lifespan,
 )
 
-# CORS middleware for frontend access
+# Configure CORS
 app.add_middleware(
     CORSMiddleware,
-    allow_origins=["http://localhost:5173", "http://localhost:3000"],  # React dev servers
+    allow_origins=[
+        "http://localhost:5173",  # Vite dev server
+        "http://localhost:3000",  # Alternative frontend port
+    ],
     allow_credentials=True,
     allow_methods=["*"],
     allow_headers=["*"],
@@ -40,25 +69,21 @@ app.add_middleware(
 
 # Include routers
 app.include_router(network.router)
-app.include_router(scada.router)
-app.include_router(simulation.router)
+app.include_router(scada_simulator.router)
 
 
 @app.get("/")
 async def root():
     """Root endpoint."""
     return {
-        "message": "RTDWMS Backend API",
+        "message": "SCADA Simulator API",
         "version": "1.0.0",
-        "endpoints": {
-            "network": "/api/network",
-            "scada": "/api/scada"
-        }
+        "docs": "/docs",
     }
 
 
 @app.get("/health")
-async def health_check():
-    """Health check endpoint."""
-    return {"status": "healthy"}
+async def health():
+    """Simple health check endpoint."""
+    return {"status": "ok"}
 
