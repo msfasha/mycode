@@ -3,12 +3,13 @@ import { useState, useRef, useEffect } from 'react';
 // Import TypeScript type definitions (type-only imports, not runtime values)
 import type { ParsedNetwork } from '../utils/epanetParser'; // Type for parsed EPANET network data structure
 import type { LatLng } from '../utils/coordinateTransform'; // Type for latitude/longitude coordinate pairs
+// Import React Router for navigation state
+import { useLocation } from 'react-router-dom';
 // Import custom React components
 import { useNetwork } from '../context/NetworkContext'; // Hook to access global network state
 import { FileUpload } from '../components/FileUpload'; // Component for uploading and parsing .inp files
 import { NetworkMap } from '../components/NetworkMap'; // Leaflet map component that displays the geographic map
 import { NetworkOverlay } from '../components/NetworkOverlay'; // Component that draws network elements (junctions, pipes) on the map
-import { DebugContext } from '../debug-context'; // Debug component that displays current context state in UI
 // Import Leaflet library for interactive maps (L is the global Leaflet namespace)
 import L from 'leaflet';
 
@@ -22,14 +23,66 @@ import L from 'leaflet';
  * - Interactive Leaflet map with network overlay
  * - Real-time coordinate transformation from Palestinian UTM to WGS 84
  */
+const API_BASE = 'http://localhost:8000';
+
+interface Anomaly {
+  id: number;
+  network_id: string;
+  timestamp: string;
+  sensor_id: string;
+  sensor_type: string;
+  location_id: string;
+  actual_value: number;
+  expected_value: number;
+  deviation_percent: number;
+  threshold_percent: number;
+  severity: 'medium' | 'high' | 'critical';
+  created_at: string;
+}
+
+interface MonitoringStatus {
+  status: 'stopped' | 'starting' | 'running' | 'error';
+  network_id: string | null;
+  last_check_time: string | null;
+}
+
 export function NetworkViewPage() {
   // Access the network object from NetworkContext (global state, persisted in localStorage)
   // This network data persists across page navigations and refreshes
-  const { network } = useNetwork(); // Get the network from the context
+  const { network, networkId } = useNetwork(); // Get the network and networkId from the context
+  
+  // Access navigation location state for highlighting locations
+  const location = useLocation();
   
   // Local component state for error messages displayed to the user
   // null = no error, string = error message to display
   const [error, setError] = useState<string | null>(null);
+  
+  // Monitoring state
+  const [monitoringStatus, setMonitoringStatus] = useState<MonitoringStatus | null>(null);
+  const [anomalies, setAnomalies] = useState<Anomaly[]>([]);
+  const [lastCheckTime, setLastCheckTime] = useState<string | null>(null);
+  
+  // Highlight state from navigation
+  const [highlightLocation, setHighlightLocation] = useState<string | null>(null);
+  const [highlightSensorType, setHighlightSensorType] = useState<string | null>(null);
+  
+  // Read highlight location from navigation state
+  useEffect(() => {
+    if (location.state && (location.state as any).highlightLocation) {
+      const state = location.state as { highlightLocation: string; sensorType?: string };
+      setHighlightLocation(state.highlightLocation);
+      setHighlightSensorType(state.sensorType || null);
+      // Clear state after reading to prevent re-highlighting on re-render
+      window.history.replaceState({}, document.title);
+      
+      // Clear highlight state after a delay to prevent re-highlighting on overlay redraws
+      setTimeout(() => {
+        setHighlightLocation(null);
+        setHighlightSensorType(null);
+      }, 100);
+    }
+  }, [location.state]);
   
   // Default map center coordinates (Amman, Jordan)
   // This is used as the initial map view before network overlay fits bounds
@@ -58,6 +111,52 @@ export function NetworkViewPage() {
       mapRef.current = null;
     };
   }, []);
+
+  // Poll monitoring status every 5 seconds
+  useEffect(() => {
+    if (!networkId) return;
+
+    // Fetch anomalies from monitoring service
+    const fetchAnomalies = async () => {
+      try {
+        const response = await fetch(`${API_BASE}/api/monitoring/anomalies?network_id=${networkId}&limit=1000`);
+        if (response.ok) {
+          const data = await response.json();
+          setAnomalies(data.anomalies || []);
+        }
+      } catch (err) {
+        console.error('Error fetching anomalies:', err);
+      }
+    };
+
+    const checkMonitoringStatus = async () => {
+      try {
+        const response = await fetch(`${API_BASE}/api/monitoring/status`);
+        if (response.ok) {
+          const data: MonitoringStatus = await response.json();
+          
+          // Only update when last_check_time changes (new monitoring cycle completed)
+          if (data.last_check_time && data.last_check_time !== lastCheckTime) {
+            setMonitoringStatus(data);
+            setLastCheckTime(data.last_check_time);
+            // Fetch latest anomalies when monitoring cycle completes
+            if (data.status === 'running') {
+              fetchAnomalies();
+            }
+          } else if (!monitoringStatus) {
+            // Initial load - set status even if last_check_time hasn't changed yet
+            setMonitoringStatus(data);
+          }
+        }
+      } catch (err) {
+        console.error('Error checking monitoring status:', err);
+      }
+    };
+
+    const interval = setInterval(checkMonitoringStatus, 5000);
+    checkMonitoringStatus(); // Check immediately
+    return () => clearInterval(interval);
+  }, [networkId, lastCheckTime]);
 
   /**
    * Callback function called by FileUpload component when a network file is successfully parsed
@@ -99,10 +198,6 @@ export function NetworkViewPage() {
   // Return JSX structure for the Network View page
   return (
     <div className="app">
-      {/* Debug overlay component: displays current NetworkContext state in top-right corner */}
-      {/* Helps troubleshoot state persistence issues during development */}
-      <DebugContext />
-      
       {/* Application header with title and subtitle */}
       <header className="app-header">
         <h1>RTDWMS - Water Network Monitor</h1>
@@ -208,6 +303,9 @@ export function NetworkViewPage() {
             <NetworkOverlay 
               map={mapRef.current!} // Pass Leaflet map instance to overlay (non-null assertion safe because mapReady is true)
               network={network} // Pass parsed network data for rendering
+              anomalies={anomalies} // Pass monitoring anomalies for coloring
+              highlightLocation={highlightLocation} // Pass location to highlight
+              highlightSensorType={highlightSensorType} // Pass sensor type for highlighting
             />
           )}
         </div>
@@ -216,11 +314,11 @@ export function NetworkViewPage() {
       {/* Inline CSS styles using template literal (scoped to this component) */}
       {/* Styles defined here are component-specific and don't affect other components */}
       <style>{`
-        /* Root container: full viewport height, vertical flex layout */
+        /* Root container: full viewport height minus nav bar, vertical flex layout */
         .app {
           display: flex; /* Flexbox layout */
           flex-direction: column; /* Stack children vertically */
-          height: 100vh; /* Full viewport height */
+          height: calc(100vh - 48px); /* Full viewport height minus nav bar height (~48px) */
           overflow: hidden; /* Prevent scrolling on root */
           background-color: #f8f9fa; /* Light gray background */
         }
@@ -253,7 +351,7 @@ export function NetworkViewPage() {
         .app-main {
           display: flex; /* Flexbox layout */
           flex-direction: row; /* Side-by-side layout */
-          height: calc(100vh - 80px); /* Full height minus header */
+          height: calc(100vh - 48px - 80px); /* Full height minus nav bar and header */
           overflow: hidden; /* Prevent scrolling */
         }
         
@@ -378,7 +476,7 @@ export function NetworkViewPage() {
           /* Stack sidebar and map vertically on mobile */
           .app-main {
             flex-direction: column; /* Change from row to column */
-            height: calc(100vh - 70px); /* Adjusted height for smaller header */
+            height: calc(100vh - 48px - 70px); /* Adjusted height for nav bar and smaller header */
           }
           
           /* Sidebar: full width, limited height on mobile */

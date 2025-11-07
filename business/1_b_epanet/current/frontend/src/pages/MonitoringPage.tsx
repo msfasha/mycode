@@ -1,4 +1,5 @@
 import { useState, useEffect } from 'react';
+import { useNavigate } from 'react-router-dom';
 import { useNetwork } from '../context/NetworkContext';
 
 const API_BASE = 'http://localhost:8000';
@@ -97,6 +98,7 @@ interface DashboardMetrics {
 }
 
 export function MonitoringPage() {
+  const navigate = useNavigate();
   const { network, networkFile, networkId: contextNetworkId, setNetworkId } = useNetwork();
   const [networkId, setLocalNetworkId] = useState<string | null>(contextNetworkId);
   const [monitoringStatus, setMonitoringStatus] = useState<MonitoringStatus | null>(null);
@@ -840,6 +842,22 @@ export function MonitoringPage() {
                            <strong> Expected:</strong> {anomaly.expected_value.toFixed(3)}</p>
                         <p><strong>Deviation:</strong> {anomaly.deviation_percent.toFixed(2)}% 
                            (Threshold: {anomaly.threshold_percent}%)</p>
+                        <button 
+                          className="show-on-map-btn"
+                          onClick={() => navigate('/', { state: { highlightLocation: anomaly.location_id, sensorType: anomaly.sensor_type } })}
+                          style={{ 
+                            marginTop: '8px', 
+                            padding: '4px 12px', 
+                            cursor: 'pointer',
+                            backgroundColor: '#007bff',
+                            color: 'white',
+                            border: 'none',
+                            borderRadius: '4px',
+                            fontSize: '12px'
+                          }}
+                        >
+                          Show on Map
+                        </button>
                       </div>
                     </div>
                   ))}
