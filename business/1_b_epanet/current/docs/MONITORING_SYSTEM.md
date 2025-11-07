@@ -202,42 +202,74 @@ Every N minutes (configurable: 1, 2, 3, 15, 60, etc.):
 
 ### Phase 3: Monitoring Service (Separate Process)
 
+**IMPORTANT**: The monitoring service is **completely separate** from the SCADA simulator:
+- No shared code, classes, or functions
+- Only shared: database models (Network, SCADAReading) and database connection
+- Can be containerized separately in the future
+- Located in `backend/services/monitoring_service.py` and `backend/routers/monitoring.py`
+
 The monitoring service runs as a **separate process** that can be started and stopped independently from the SCADA simulator.
 
 #### Starting the Monitoring Service
 
 When you click "Start Monitoring" in the frontend:
 
-1. **Monitoring Engine Setup**:
-   - Loads EPANET network file
-   - Creates 24-hour diurnal demand pattern
-   - Assigns pattern to all junctions
-   - Initializes Extended Period Simulation (EPS)
-   - **Catches up to real-time**: If you start at 2:00 PM, EPS advances 14 hours to sync
+1. **Configuration** (set in frontend):
+   - **Monitoring Interval**: How often to run monitoring cycle (default: 1.0 minute, configurable)
+   - **Time Window**: How far back to query SCADA readings (default: 5.0 minutes, configurable)
+   - **Pressure Threshold**: Deviation threshold for pressure sensors (default: 10.0%)
+   - **Flow Threshold**: Deviation threshold for flow sensors (default: 15.0%)
+   - **Tank Level Threshold**: Deviation threshold for tank level sensors (default: 5.0%)
+   - **Enable Tank Feedback**: Whether to update EPANET tank levels from SCADA (default: True)
 
-2. **Monitoring Loop Begins**:
+2. **Monitoring Engine Setup**:
+   - Loads EPANET network file (.inp)
+   - Initializes Extended Period Simulation (EPS)
+   - Runs initial simulation to get current state
    - Sets status to "starting"
-   - Runs at configurable intervals (default: 5 minutes)
-   - Queries database for recent SCADA readings
-   - Compares with EPANET expected values
-   - Detects anomalies
+
+3. **Monitoring Loop Begins**:
+   - Starts background asyncio task
    - Updates status to "running" when loop begins
 
 **Stopping the Monitoring Service**:
 - When you click "Stop Monitoring" in the frontend:
   - Monitoring service gracefully stops the monitoring loop
+  - Closes EPANET instance
   - Updates status to "stopped"
   - Status remains queryable from frontend
 
-### Phase 2: Continuous Monitoring Loop
+### Phase 3: Continuous Monitoring Loop
 
-The monitoring loop runs every **5 minutes** (configurable):
+The monitoring loop runs every **N minutes** (configurable from frontend, default: 1 minute):
 
-#### Step 1: Get Expected Values from EPANET
+#### Step 1: Query Recent SCADA Readings
 
 ```
 Current Time: 2:05 PM (real-world)
-Elapsed since start: 5 minutes
+Query Window: 5 minutes (configurable)
+Last Processed Timestamp: 2:00 PM
+
+Query SCADA readings:
+- WHERE timestamp > last_processed_timestamp
+- AND timestamp <= current_time
+- AND timestamp >= (current_time - time_window_minutes)
+
+This ensures:
+- No readings are reprocessed (tracked by last_processed_timestamp)
+- Only recent readings are considered (bounded by time_window)
+- Handles late-arriving readings gracefully
+```
+
+**Key Point**: The monitoring service uses `last_processed_timestamp` to track which readings have been processed. This avoids:
+- Reprocessing the same readings
+- Missing readings that arrive late
+- Querying too far back in time
+
+#### Step 2: Run EPANET Extended Period Simulation
+
+```
+Current Time: 2:05 PM (real-world)
 EPS Time: 14:05 (synchronized to real-time)
 
 EPANET calculates:
@@ -249,59 +281,25 @@ EPANET calculates:
 **Key Point**: EPANET uses Extended Period Simulation, which means:
 - Tank levels change cumulatively over time (not reset each time)
 - Network state is preserved between steps
-- Patterns are applied based on current hour (2 PM = hour 14)
+- Patterns from .inp file are applied based on simulation time
+- The simulation uses time patterns that match real-time diurnal variations
 
-#### Step 2: Generate Actual SCADA Readings
-
-```
-SCADA Simulator generates:
-- Pressure sensor readings (at junctions/tanks)
-- Flow sensor readings (in pipes)
-- Tank level readings (in tanks)
-
-Each reading includes:
-- Real-time timestamp (2:05 PM)
-- Sensor ID (e.g., "PRESSURE_29")
-- Sensor type (pressure/flow/level)
-- Value (baseline × pattern_multiplier × noise)
-- Location ID
-```
-
-**Pattern Application**:
-- Uses real-time hour (14 = 2 PM)
-- Applies diurnal multiplier (afternoon low: 0.6x)
-- Adds realistic noise (±2% pressure, ±3% flow, ±1% level)
-
-#### Step 3: Update Tank Levels from SCADA
+#### Step 3: Compare Readings and Detect Anomalies
 
 ```
-Optional step to improve accuracy:
-- Uses actual tank level readings from SCADA
-- Updates EPANET tank initial conditions
-- Makes future predictions more accurate
-```
-
-#### Step 4: Compare and Detect Anomalies
-
-```
-For each sensor reading:
-
-1. Get expected value from EPANET
-2. Get actual value from SCADA
-3. Calculate deviation:
-   deviation = |actual - expected| / expected × 100%
-
-4. Compare with threshold:
-   - Pressure: 10% threshold
-   - Flow: 15% threshold
-   - Tank Level: 5% threshold
-
-5. If deviation > threshold:
-   → Flag as ANOMALY
+For each SCADA reading:
+1. Get expected value from EPANET (by location_id and sensor_type)
+2. Calculate deviation: |actual - expected| / expected × 100%
+3. Get threshold based on sensor_type:
+   - Pressure: pressure_threshold_percent (default: 10%)
+   - Flow: flow_threshold_percent (default: 15%)
+   - Tank Level: tank_level_threshold_percent (default: 5%)
+4. If deviation > threshold:
+   → Create anomaly record
    → Classify severity:
-      - Medium: 1.0x - 1.5x threshold
-      - High: 1.5x - 2.0x threshold
-      - Critical: > 2.0x threshold
+      - Medium: 1.0× - 1.5× threshold
+      - High: 1.5× - 2.0× threshold
+      - Critical: ≥ 2.0× threshold
 ```
 
 **Example**:
@@ -311,85 +309,126 @@ Expected: 45.2 m
 Actual: 38.5 m
 Deviation: |38.5 - 45.2| / 45.2 × 100% = 14.82%
 Threshold: 10%
-Result: ANOMALY (High severity - 1.48x threshold)
+Result: ANOMALY (High severity - 1.48× threshold)
 ```
 
-#### Step 5: Store SCADA Readings
+#### Step 4: Update Tank Levels from SCADA (Optional Feedback Loop)
 
 ```
-All sensor readings stored in database:
-- Timestamp
-- Sensor ID, type, location
-- Value
+If enable_tank_feedback is True (default):
+- Uses actual tank level readings from SCADA
+- Updates EPANET tank initial levels
+- Makes future predictions more accurate
+
+This feedback loop improves monitoring accuracy by:
+- Correcting EPANET predictions with actual tank levels
+- Accounting for real-world tank operations
+- Reducing false positives from tank level predictions
+```
+
+#### Step 5: Store Anomalies
+
+```
+Detected anomalies stored in database (anomalies table):
+- Timestamp (when anomaly was detected)
+- Sensor information (sensor_id, sensor_type, location_id)
+- Actual vs Expected values
+- Deviation percentage
+- Threshold that was exceeded
+- Severity level (medium, high, critical)
 - Network ID
 ```
 
-#### Step 6: Store Anomalies
+#### Step 6: Store Expected Values for Historical Analysis
 
 ```
-Detected anomalies stored in database:
-- Timestamp
-- Sensor information
-- Actual vs Expected values
-- Deviation percentage
-- Severity level
+Expected values stored in database (expected_values table):
+- Timestamp (when prediction was made)
+- Location ID and sensor type
+- Expected value from EPANET
+- EPS hour (simulation hour)
+- Network ID
+
+This enables:
+- Trend analysis over time
+- Pattern detection
+- Model accuracy tracking
+- Digital twin insights
 ```
 
-#### Step 7: Update Status
+#### Step 7: Update Last Processed Timestamp
+
+```
+Update last_processed_timestamp:
+- If readings were processed: use latest reading timestamp
+- If no readings: use current time
+
+This ensures:
+- Next cycle only queries new readings
+- No readings are missed or reprocessed
+```
+
+#### Step 8: Update Status
 
 ```
 Update monitoring service status with:
 - Last check time
+- Last processed timestamp
 - Total anomalies detected
 - Current monitoring interval
 - EPS synchronization status
+- Last check statistics (readings processed, anomalies found, comparison time)
 - Status: "running"
 ```
 
-#### Step 8: Wait for Next Interval
+#### Step 9: Wait for Next Interval
 
 ```
-Sleep for 5 minutes (or configured interval)
+Sleep for N minutes (monitoring_interval_minutes, configurable from frontend)
 Then repeat from Step 1
 ```
 
 ## Real-Time Synchronization
 
-EPS synchronizes to real-time:
+EPS synchronization with real-time:
 
 1. **On Start**: 
-   - Record start time: `2:00 PM = hour 14`
-   - Calculate catch-up: `14 hours × 60 = 840 minutes`
-   - Advance EPS by 840 steps → EPS now at hour 14
-   - EPS and real-time are synchronized!
+   - Load EPANET network file
+   - Run `solveCompleteHydraulics()` to initialize simulation
+   - Track current real-time hour
+   - EPANET uses time patterns from .inp file that match diurnal variations
+   - EPS hour is tracked to match real-time hour
 
 2. **During Monitoring**:
-   - Calculate elapsed time since start
-   - Advance EPS to match elapsed time
-   - EPS hour = (start_hour + elapsed_hours) % 24
-   - Always stays in sync with real-time
+   - Each cycle: Run `solveCompleteHydraulics()` to get current network state
+   - EPANET applies time patterns based on simulation time
+   - Extract expected values at current real-time hour
+   - EPS hour tracked to match real-time hour
+
+**Note**: EPANET's `solveCompleteHydraulics()` runs the entire simulation period defined in the .inp file. The synchronization is achieved by:
+- Using time patterns in .inp file that match real-time diurnal patterns
+- Tracking real-time hour and matching it with EPS hour
+- Extracting values at the appropriate simulation time
 
 ### Example Timeline
 
 ```
 Start: 2:00 PM (14:00)
-├─ EPS catches up: 0 → 14 hours (840 steps)
-├─ EPS hour: 14, Real-time hour: 14 ✓
+├─ Load EPANET network
+├─ Run solveCompleteHydraulics() (initializes simulation)
+├─ Track EPS hour: 14, Real-time hour: 14 ✓
 
-After 5 minutes: 2:05 PM
-├─ Elapsed: 5 minutes
-├─ EPS advances: 14:00 → 14:05
-├─ EPS hour: 14, Real-time hour: 14 ✓
+After 1 minute: 2:01 PM
+├─ Query SCADA readings since 2:00 PM
+├─ Run solveCompleteHydraulics() (gets current state)
+├─ Extract expected values
+├─ Compare and detect anomalies
+├─ Update last_processed_timestamp
+├─ EPS hour: 14.017, Real-time hour: 14.017 ✓
 
 After 1 hour: 3:00 PM
-├─ Elapsed: 1 hour
-├─ EPS advances: 14:05 → 15:05
 ├─ EPS hour: 15, Real-time hour: 15 ✓
-
-After 24 hours: Next day 2:00 PM
-├─ Elapsed: 24 hours
-├─ EPS wraps: 14:00 (modulo 24 hours)
-├─ EPS hour: 14, Real-time hour: 14 ✓
+├─ Patterns match real-time demand variations
 ```
 
 ## Diurnal Patterns
@@ -469,17 +508,40 @@ Stores detected anomalies:
 anomalies (
     id,
     network_id,
-    timestamp,
-    sensor_id,
-    sensor_type,
-    location_id,
+    timestamp,         -- When anomaly was detected (real-time)
+    sensor_id,         -- e.g., "PRESSURE_29"
+    sensor_type,       -- "pressure", "flow", "level"
+    location_id,       -- Node or link ID
     actual_value,      -- What sensor reported
     expected_value,    -- What EPANET predicted
-    deviation_percent,  -- How much they differ
-    threshold,         -- Threshold for this sensor type
-    severity           -- "medium", "high", "critical"
+    deviation_percent, -- How much they differ: |actual - expected| / expected × 100
+    threshold_percent, -- Threshold that was exceeded
+    severity,          -- "medium", "high", "critical"
+    created_at         -- When record was created
 )
 ```
+
+**Indexes**: network_id, timestamp, severity for efficient querying
+
+### Expected Values Table
+
+Stores EPANET predictions for historical analysis:
+```sql
+expected_values (
+    id,
+    network_id,
+    timestamp,         -- When prediction was made (real-time)
+    location_id,       -- Node or link ID
+    sensor_type,       -- "pressure", "flow", "level"
+    expected_value,    -- Predicted value from EPANET
+    eps_hour,          -- EPANET simulation hour (0-24)
+    created_at         -- When record was created
+)
+```
+
+**Indexes**: network_id, timestamp, location_id for efficient querying
+
+**Purpose**: Enables trend analysis, pattern detection, and model accuracy tracking for digital twin insights.
 
 
 
@@ -538,19 +600,22 @@ The monitoring service status includes:
   "status": "running" | "stopped" | "starting" | "error",
   "network_id": "uuid",
   "started_at": "2024-01-15T14:00:00Z",
-  "last_check_time": "2024-01-15T14:05:00Z",
+  "last_check_time": "2024-01-15T14:01:00Z",
+  "last_processed_timestamp": "2024-01-15T14:01:00Z",
   "total_anomalies_detected": 12,
   "configuration": {
-    "monitoring_interval_minutes": 5,
+    "monitoring_interval_minutes": 1.0,
+    "time_window_minutes": 5.0,
     "pressure_threshold_percent": 10.0,
     "flow_threshold_percent": 15.0,
-    "tank_level_threshold_percent": 5.0
+    "tank_level_threshold_percent": 5.0,
+    "enable_tank_feedback": true
   },
   "eps_synchronization": {
     "synced": true,
-    "current_eps_hour": 14,
-    "real_time_hour": 14,
-    "elapsed_minutes": 5
+    "current_eps_hour": 14.017,
+    "real_time_hour": 14.017,
+    "elapsed_minutes": 840.0
   },
   "last_check_stats": {
     "readings_processed": 320,
@@ -564,6 +629,7 @@ The monitoring service status includes:
 **Status Updates**:
 - Updated after each monitoring cycle
 - Includes EPS synchronization status
+- Tracks last_processed_timestamp to avoid reprocessing readings
 - Accessible via API endpoint: `GET /api/monitoring/status`
 
 ### Frontend Status Display
@@ -574,6 +640,13 @@ The frontend can:
 - **Show configuration** currently in use
 - **Display statistics** (readings generated, anomalies detected, etc.)
 - **Indicate process state** with visual indicators (running/stopped/error)
+- **Display dashboard metrics** with visual cards showing:
+  - Network health score and status
+  - Total demand comparison (SCADA vs Expected)
+  - Average pressure comparison (SCADA vs Expected)
+  - Sensor coverage percentage
+  - Anomaly rate and severity breakdown
+  - Tank levels (actual vs expected)
 
 **Example Frontend Status Display**:
 ```
@@ -591,6 +664,29 @@ The frontend can:
 │ Last Check: 2:05 PM             │
 │ Anomalies Detected: 12          │
 │ EPS: Synced (Hour 14)           │
+└─────────────────────────────────┘
+
+┌─────────────────────────────────┐
+│ Dashboard Metrics                │
+│                                  │
+│ ┌──────────┐ ┌──────────┐      │
+│ │ Health   │ │ Demand   │      │
+│ │ 85.3/100 │ │ 1250 L/s │      │
+│ │ Excellent│ │ ↑ 4.21%  │      │
+│ └──────────┘ └──────────┘      │
+│                                  │
+│ ┌──────────┐ ┌──────────┐      │
+│ │ Pressure │ │ Coverage │      │
+│ │ 42.5 m   │ │ 90.14%   │      │
+│ │ ↓ 5.56%  │ │ 320/355  │      │
+│ └──────────┘ └──────────┘      │
+│                                  │
+│ ┌──────────┐ ┌──────────┐      │
+│ │ Anomaly  │ │ Tanks    │      │
+│ │ Rate     │ │ TANK1:   │      │
+│ │ 1.56%    │ │ 8.5/9.0m │      │
+│ │ M:3 H:2  │ │ ↓ 5.56%  │      │
+│ └──────────┘ └──────────┘      │
 └─────────────────────────────────┘
 ```
 
@@ -616,67 +712,265 @@ Process status can be:
 - More accurate than snapshot analysis (which would reset tank levels each time)
 
 ### 3. Configurable Monitoring
-- Adjustable monitoring interval (default: 5 minutes)
-- Configurable anomaly thresholds
-- Multiple networks can run simultaneously
+- Adjustable monitoring interval (default: 1 minute, configurable from frontend)
+- Configurable time window for SCADA queries (default: 5 minutes)
+- Configurable anomaly thresholds (pressure, flow, tank level)
+- Configurable tank feedback (enable/disable)
+- Single network support (for now)
 
 ### 4. Comprehensive Data Storage
-- All SCADA readings stored
-- All anomalies tracked
+- All SCADA readings stored (from SCADA simulator)
+- All anomalies tracked (detected by monitoring service)
+- Expected values stored for historical analysis
 - Time-series database for efficient queries
+- Indexed queries for performance
 
-### 5. Independent Process Status
+### 5. Dashboard Metrics
+- Real-time aggregated metrics comparing SCADA vs EPANET
+- Network health score (0-100) with status indicators
+- Total demand comparison (sum of flow readings)
+- Average pressure comparison across all junctions
+- Sensor coverage percentage (active/total sensors)
+- Anomaly rate and severity breakdown
+- Tank levels comparison (actual vs expected)
+- Visual dashboard with color-coded indicators
+- Auto-updates at monitoring interval
+
+### 6. Independent Process Status
 - SCADA Simulator maintains its own status (running/stopped/error)
 - Monitoring Service maintains its own status (running/stopped/error)
 - Status accessible from frontend via API endpoints
 - Real-time statistics and configuration visible
 - Process states can be monitored independently
 
+## API Endpoints
+
+The monitoring service provides the following REST API endpoints:
+
+### POST /api/monitoring/start
+Start the monitoring service with configuration.
+
+**Request Body**:
+```json
+{
+  "network_id": "uuid",
+  "monitoring_interval_minutes": 1.0,
+  "time_window_minutes": 5.0,
+  "pressure_threshold_percent": 10.0,
+  "flow_threshold_percent": 15.0,
+  "tank_level_threshold_percent": 5.0,
+  "enable_tank_feedback": true
+}
+```
+
+### POST /api/monitoring/stop
+Stop the monitoring service.
+
+**Request Body**:
+```json
+{
+  "network_id": "uuid"  // Optional
+}
+```
+
+### GET /api/monitoring/status
+Get current monitoring service status.
+
+**Response**: Returns status dictionary with configuration, statistics, and EPS synchronization info.
+
+### GET /api/monitoring/anomalies
+Query detected anomalies.
+
+**Query Parameters**:
+- `network_id` (required): UUID of network
+- `severity` (optional): Filter by severity ("medium", "high", "critical")
+- `start_time` (optional): Start time filter (ISO format)
+- `end_time` (optional): End time filter (ISO format)
+- `limit` (default: 100): Maximum number of results
+- `offset` (default: 0): Pagination offset
+
+### GET /api/monitoring/dashboard-metrics
+Get aggregated dashboard metrics for monitoring page.
+
+**Query Parameters**:
+- `network_id` (required): UUID of network
+- `time_window_minutes` (default: 5.0, max: 60): How far back to query data for metrics
+
+**Response**:
+```json
+{
+  "time_window_minutes": 5.0,
+  "start_time": "2024-01-15T14:00:00Z",
+  "end_time": "2024-01-15T14:05:00Z",
+  "demand": {
+    "total_scada_demand": 1250.5,
+    "total_expected_demand": 1200.0,
+    "deviation_percent": 4.21,
+    "unit": "L/s"
+  },
+  "pressure": {
+    "avg_scada_pressure": 42.5,
+    "avg_expected_pressure": 45.0,
+    "deviation_percent": -5.56,
+    "unit": "m"
+  },
+  "sensor_coverage": {
+    "active_sensors": 320,
+    "total_sensors": 355,
+    "coverage_percent": 90.14
+  },
+  "anomalies": {
+    "total_count": 5,
+    "rate_percent": 1.56,
+    "by_severity": {
+      "medium": 3,
+      "high": 2,
+      "critical": 0
+    },
+    "total_readings": 320
+  },
+  "tank_levels": [
+    {
+      "tank_id": "TANK1",
+      "actual_level": 8.5,
+      "expected_level": 9.0,
+      "deviation_percent": -5.56
+    }
+  ],
+  "network_health": {
+    "score": 85.3,
+    "status": "excellent",
+    "breakdown": {
+      "anomaly_score": 96.88,
+      "pressure_score": 72.2,
+      "demand_score": 86.0,
+      "coverage_score": 90.14
+    }
+  }
+}
+```
+
+**Metrics Explained**:
+- **Demand**: Total flow demand from SCADA vs EPANET expected (sum of all flow readings)
+- **Pressure**: Average pressure across all junctions (SCADA vs EPANET expected)
+- **Sensor Coverage**: Percentage of sensors reporting data (active/total)
+- **Anomalies**: Anomaly count, rate, and breakdown by severity
+- **Tank Levels**: Actual vs expected levels for each tank with deviation
+- **Network Health**: Composite score (0-100) based on:
+  - Anomaly rate (40% weight): Lower is better
+  - Pressure deviation (30% weight): Lower is better
+  - Demand match (20% weight): Closer is better
+  - Sensor coverage (10% weight): Higher is better
+  - Status: "excellent" (≥80), "good" (≥60), "fair" (≥40), "poor" (<40)
+
+### GET /api/monitoring/health
+Health check endpoint.
+
 ## Example Scenario
 
 **Setup**:
 - Network: 150 junctions, 200 pipes, 5 tanks
 - Start time: 2:00 PM (14:00)
-- Monitoring interval: 5 minutes
+- Monitoring interval: 1 minute (configurable)
+- Time window: 5 minutes (configurable)
 
 **What Happens**:
 
 1. **2:00 PM - Start**:
-   - EPS catches up: 0 → 14 hours (840 steps, takes ~10 seconds)
-   - EPS now at hour 14, matching real-time
+   - Load EPANET network file
+   - Initialize EPS (run solveCompleteHydraulics())
+   - Track EPS hour: 14, Real-time hour: 14 ✓
    - Monitoring loop begins
 
-2. **2:05 PM - First Check**:
-   - EPANET: Calculates expected values at hour 14:05
-   - SCADA: Generates readings using hour 14 patterns (afternoon low: 0.6x)
-   - Comparison: No anomalies (values match within thresholds)
-   - Storage: 355 readings stored (150 pressures + 200 flows + 5 levels)
+2. **2:01 PM - First Check**:
+   - Query SCADA readings: timestamp > 2:00 PM AND <= 2:01 PM
+   - Run EPANET solveCompleteHydraulics() (gets current state)
+   - Compare readings with expected values
+   - No anomalies detected (values match within thresholds)
+   - Store expected values for historical analysis
+   - Update last_processed_timestamp = 2:01 PM
+   - Update tank levels from SCADA (if enabled)
 
-3. **2:10 PM - Second Check**:
-   - EPANET: Advances to 14:10
-   - SCADA: Generates new readings
-   - Comparison: 1 anomaly detected (pressure drop at junction 29)
-   - Storage: 355 readings + 1 anomaly stored
+3. **2:02 PM - Second Check**:
+   - Query SCADA readings: timestamp > 2:01 PM AND <= 2:02 PM
+   - Run EPANET solveCompleteHydraulics()
+   - Compare readings
+   - 1 anomaly detected (pressure drop at junction 29)
+   - Store anomaly and expected values
+   - Update last_processed_timestamp = 2:02 PM
 
-4. **Continues every 5 minutes...**
+4. **Continues every 1 minute...**
 
-5. **Next Day 2:00 PM**:
-   - EPS wraps around (24 hours elapsed)
-   - EPS hour: 14, Real-time hour: 14
-   - Still synchronized!
+## Implementation Details
+
+### Code Structure
+
+**Monitoring Service** (`backend/services/monitoring_service.py`):
+- `MonitoringService` class: Core monitoring logic
+- Completely separate from SCADA simulator
+- Simple, well-documented code
+- No fancy patterns or abstractions
+
+**API Router** (`backend/routers/monitoring_router.py`):
+- REST API endpoints for monitoring control
+- Dashboard metrics endpoint for aggregated statistics
+- Request/response models
+- Error handling
+
+**Database Models** (`backend/models.py`):
+- `Anomaly`: Stores detected anomalies
+- `ExpectedValue`: Stores EPANET predictions for historical analysis
+
+### Key Implementation Features
+
+1. **Reading Processing Tracking**:
+   - Uses `last_processed_timestamp` to track processed readings
+   - Avoids reprocessing the same readings
+   - Handles late-arriving readings gracefully
+   - Bounded by `time_window_minutes` to limit query range
+
+2. **EPANET Integration**:
+   - Loads network .inp file on start
+   - Runs `solveCompleteHydraulics()` each cycle
+   - Extracts expected values for all locations
+   - Updates tank levels from SCADA (optional feedback)
+
+3. **Anomaly Detection**:
+   - Compares actual vs expected for each reading
+   - Calculates deviation: `|actual - expected| / expected × 100`
+   - Classifies severity: medium (1.0-1.5× threshold), high (1.5-2.0×), critical (≥2.0×)
+   - Stores anomalies with full context
+
+4. **Historical Analysis**:
+   - Stores expected values every monitoring cycle
+   - Enables trend analysis and pattern detection
+   - Supports digital twin insights
+
+5. **Dashboard Metrics**:
+   - Aggregates SCADA readings, expected values, and anomalies
+   - Calculates network health score based on multiple factors
+   - Provides real-time comparison metrics (demand, pressure, coverage)
+   - Updates automatically at monitoring interval
+   - Accessible via `/api/monitoring/dashboard-metrics` endpoint
 
 ## Summary
 
 The monitoring system:
-- ✅ Runs continuously in the background
+- ✅ Runs continuously in the background (configurable interval, default: 1 minute)
 - ✅ Uses EPANET hydraulic analysis to predict expected values (real network analysis)
-- ✅ Generates realistic SCADA sensor readings (simulated until real sensors are connected)
-- ✅ Synchronizes EPANET Extended Period Simulation to real-time
-- ✅ Compares expected vs actual values
-- ✅ Detects anomalies with configurable thresholds
-- ✅ Stores all data in database
+- ✅ Queries SCADA readings from database (does not generate them)
+- ✅ Tracks processed readings to avoid reprocessing
+- ✅ Compares expected vs actual values with configurable thresholds
+- ✅ Detects anomalies and classifies severity
+- ✅ Stores anomalies and expected values for analysis
+- ✅ Updates EPANET tank levels from SCADA (optional feedback loop)
+- ✅ Stores all data in database with proper indexes
 - ✅ Handles errors gracefully
-- ✅ Supports multiple networks simultaneously
+- ✅ Completely separate from SCADA simulator (can be containerized independently)
+- ✅ Simple, well-documented code
+- ✅ Provides dashboard metrics endpoint for real-time aggregated statistics
+- ✅ Calculates network health score (0-100) based on multiple factors
+- ✅ Frontend dashboard displays metrics with visual indicators and comparisons
 
-**Important Note**: This is a **monitoring system** for **real water networks**. The only simulated component is the SCADA sensor readings (because real sensors aren't connected yet). EPANET performs real hydraulic analysis of the actual network to predict what values should be. When real SCADA sensors are connected, simply replace the SCADA simulator with real sensor data.
+**Important Note**: This is a **monitoring system** for **real water networks**. The only simulated component is the SCADA sensor readings (because real sensors aren't connected yet). EPANET performs real hydraulic analysis of the actual network to predict what values should be. When real SCADA sensors are connected, the monitoring service will automatically use real sensor data from the database.
 

@@ -35,6 +35,8 @@ class Network(Base):
     logs = relationship("SCADAGenerationLog", back_populates="network")
     baseline_data = relationship("BaselineData", back_populates="network")
     network_items = relationship("NetworkItem", back_populates="network")
+    anomalies = relationship("Anomaly", back_populates="network")
+    expected_values = relationship("ExpectedValue", back_populates="network")
 
 
 class NetworkItem(Base):
@@ -146,5 +148,107 @@ class SCADAGenerationLog(Base):
         Index("idx_logs_network_id", "network_id"),
         Index("idx_logs_generation_timestamp", "generation_timestamp"),
         Index("idx_logs_network_timestamp", "network_id", "generation_timestamp"),
+    )
+
+
+class Anomaly(Base):
+    """
+    Stores detected anomalies from monitoring service.
+    
+    An anomaly is created when a SCADA reading deviates significantly
+    from the expected value predicted by EPANET. This model is completely
+    separate from SCADA simulator components - it only stores monitoring results.
+    
+    The monitoring service compares actual SCADA readings (from database)
+    with expected values from EPANET Extended Period Simulation (EPS).
+    When the deviation exceeds the configured threshold, an anomaly is created.
+    
+    Attributes:
+        network_id: UUID of the network being monitored
+        timestamp: When the anomaly was detected (real-time, not SCADA reading timestamp)
+        sensor_id: Sensor identifier (e.g., "PRESSURE_29")
+        sensor_type: Type of sensor ("pressure", "flow", "level")
+        location_id: Network location ID (junction, pipe, or tank ID from .inp file)
+        actual_value: Actual value from SCADA reading
+        expected_value: Expected value from EPANET prediction
+        deviation_percent: Percentage deviation: |actual - expected| / expected × 100
+        threshold_percent: Threshold that was exceeded (pressure: 10%, flow: 15%, level: 5%)
+        severity: Severity classification ("medium", "high", "critical")
+            - medium: deviation between 1.0× and 1.5× threshold
+            - high: deviation between 1.5× and 2.0× threshold
+            - critical: deviation >= 2.0× threshold
+        created_at: When record was created in database
+    """
+    __tablename__ = "anomalies"
+
+    id = Column(Integer, primary_key=True, autoincrement=True)
+    network_id = Column(PGUUID(as_uuid=True), ForeignKey("networks.id"), nullable=False)
+    timestamp = Column(DateTime, nullable=False)  # When anomaly was detected (real-time)
+    sensor_id = Column(String(100), nullable=False)  # e.g., "PRESSURE_29"
+    sensor_type = Column(String(50), nullable=False)  # "pressure", "flow", "level"
+    location_id = Column(String(100), nullable=False)  # Node or link ID
+    actual_value = Column(Float, nullable=False)  # Actual value from SCADA reading
+    expected_value = Column(Float, nullable=False)  # Expected value from EPANET
+    deviation_percent = Column(Float, nullable=False)  # Percentage deviation
+    threshold_percent = Column(Float, nullable=False)  # Threshold that was exceeded
+    severity = Column(String(20), nullable=False)  # "medium", "high", "critical"
+    created_at = Column(DateTime, default=datetime.now, nullable=False)  # Use local time instead of UTC
+
+    # Relationships
+    network = relationship("Network", back_populates="anomalies")
+
+    # Indexes for query performance
+    __table_args__ = (
+        Index("idx_anomalies_network_id", "network_id"),
+        Index("idx_anomalies_timestamp", "timestamp"),
+        Index("idx_anomalies_severity", "severity"),
+        Index("idx_anomalies_network_timestamp", "network_id", "timestamp"),
+        Index("idx_anomalies_network_severity", "network_id", "severity"),
+    )
+
+
+class ExpectedValue(Base):
+    """
+    Stores EPANET-predicted values for historical analysis and digital twin.
+    
+    This model stores expected values computed by EPANET Extended Period
+    Simulation (EPS) during monitoring. Values are stored every monitoring
+    cycle to enable trend analysis, pattern detection, and model accuracy tracking.
+    
+    This is completely separate from SCADA simulator - it only stores
+    EPANET predictions, not SCADA readings. The monitoring service queries
+    SCADA readings from the database and compares them with these expected values.
+    
+    Attributes:
+        network_id: UUID of the network
+        timestamp: When prediction was made (real-time, synchronized with monitoring cycle)
+        location_id: Network location ID (junction, pipe, or tank ID from .inp file)
+        sensor_type: Type of sensor ("pressure", "flow", "level")
+        expected_value: Predicted value from EPANET EPS
+        eps_hour: EPANET simulation hour (0-24) when prediction was made
+            This helps track the simulation state and ensures synchronization
+        created_at: When record was created in database
+    """
+    __tablename__ = "expected_values"
+
+    id = Column(Integer, primary_key=True, autoincrement=True)
+    network_id = Column(PGUUID(as_uuid=True), ForeignKey("networks.id"), nullable=False)
+    timestamp = Column(DateTime, nullable=False)  # When prediction was made (real-time)
+    location_id = Column(String(100), nullable=False)  # Node or link ID
+    sensor_type = Column(String(50), nullable=False)  # "pressure", "flow", "level"
+    expected_value = Column(Float, nullable=False)  # Predicted value from EPANET
+    eps_hour = Column(Float, nullable=False)  # EPANET simulation hour (0-24)
+    created_at = Column(DateTime, default=datetime.now, nullable=False)  # Use local time instead of UTC
+
+    # Relationships
+    network = relationship("Network", back_populates="expected_values")
+
+    # Indexes for query performance
+    __table_args__ = (
+        Index("idx_expected_network_id", "network_id"),
+        Index("idx_expected_timestamp", "timestamp"),
+        Index("idx_expected_location_id", "location_id"),
+        Index("idx_expected_network_timestamp", "network_id", "timestamp"),
+        Index("idx_expected_network_location", "network_id", "location_id"),
     )
 

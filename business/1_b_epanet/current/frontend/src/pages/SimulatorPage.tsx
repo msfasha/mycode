@@ -16,6 +16,9 @@ interface SimulatorStatus {
     delay_mean: number;
     delay_std_dev: number;
     delay_max: number;
+    pressure_noise_percent: number;
+    flow_noise_percent: number;
+    tank_level_noise_percent: number;
   } | null;
   current_cycle: {
     junctions_selected: number;
@@ -50,6 +53,9 @@ export function SimulatorPage() {
   const [delayMean, setDelayMean] = useState<number>(2.5);
   const [delayStdDev, setDelayStdDev] = useState<number>(2.0);
   const [delayMax, setDelayMax] = useState<number>(10.0);
+  const [pressureNoise, setPressureNoise] = useState<number>(2.0);
+  const [flowNoise, setFlowNoise] = useState<number>(3.0);
+  const [tankLevelNoise, setTankLevelNoise] = useState<number>(1.0);
   
   // Logs state
   const [logs, setLogs] = useState<GenerationLog[]>([]);
@@ -185,6 +191,9 @@ export function SimulatorPage() {
           delay_mean: delayMean,
           delay_std_dev: delayStdDev,
           delay_max: delayMax,
+          pressure_noise_percent: pressureNoise,
+          flow_noise_percent: flowNoise,
+          tank_level_noise_percent: tankLevelNoise,
         })
       });
       
@@ -375,6 +384,48 @@ export function SimulatorPage() {
                     onChange={(e) => setDelayMax(parseFloat(e.target.value))}
                   />
                 </div>
+                <div className="config-item">
+                  <label>Pressure Noise (%):</label>
+                  <input
+                    type="number"
+                    min="0"
+                    max="50"
+                    step="0.1"
+                    value={pressureNoise}
+                    onChange={(e) => setPressureNoise(parseFloat(e.target.value))}
+                  />
+                  <small style={{color: '#666', fontSize: '0.85em'}}>
+                    Noise level for pressure sensors. Example: 2.0 = ±2% noise
+                  </small>
+                </div>
+                <div className="config-item">
+                  <label>Flow Noise (%):</label>
+                  <input
+                    type="number"
+                    min="0"
+                    max="50"
+                    step="0.1"
+                    value={flowNoise}
+                    onChange={(e) => setFlowNoise(parseFloat(e.target.value))}
+                  />
+                  <small style={{color: '#666', fontSize: '0.85em'}}>
+                    Noise level for flow sensors. Example: 3.0 = ±3% noise
+                  </small>
+                </div>
+                <div className="config-item">
+                  <label>Tank Level Noise (%):</label>
+                  <input
+                    type="number"
+                    min="0"
+                    max="50"
+                    step="0.1"
+                    value={tankLevelNoise}
+                    onChange={(e) => setTankLevelNoise(parseFloat(e.target.value))}
+                  />
+                  <small style={{color: '#666', fontSize: '0.85em'}}>
+                    Noise level for tank level sensors. Example: 1.0 = ±1% noise
+                  </small>
+                </div>
               </div>
             </div>
           )}
@@ -498,6 +549,54 @@ export function SimulatorPage() {
                     <p><strong>Tip:</strong> This prevents unrealistic delays and ensures all readings are in the past. 
                     A value of 5-10 minutes is typical. Make sure Delay Max is greater than Delay Mean for the distribution to work properly.</p>
                   </div>
+
+                  {/* Pressure Noise */}
+                  <div className="help-section">
+                    <h3>Pressure Noise (%)</h3>
+                    <p><strong>What it does:</strong> Controls the amount of random noise added to pressure sensor readings. Noise simulates sensor measurement uncertainty and environmental variations.</p>
+                    <div className="help-example">
+                      <strong>Example:</strong> Setting this to 2.0% means pressure readings will have ±2% random noise.
+                      <br />
+                      If baseline pressure is 45.0 m, the reading might be anywhere from 44.1 m to 45.9 m (45.0 × 0.98 to 45.0 × 1.02).
+                      <br />
+                      The noise is uniformly distributed, so any value in that range is equally likely.
+                    </div>
+                    <p><strong>Range:</strong> 0.0 to 50.0% (0.0 = no noise, 50.0 = ±50% noise)</p>
+                    <p><strong>Tip:</strong> Real pressure sensors typically have 1-3% noise. Lower values (1-2%) = more accurate readings.
+                    Higher values (5-10%) = more variation, useful for testing anomaly detection sensitivity.</p>
+                  </div>
+
+                  {/* Flow Noise */}
+                  <div className="help-section">
+                    <h3>Flow Noise (%)</h3>
+                    <p><strong>What it does:</strong> Controls the amount of random noise added to flow sensor readings. Flow sensors typically have more variation than pressure sensors.</p>
+                    <div className="help-example">
+                      <strong>Example:</strong> Setting this to 3.0% means flow readings will have ±3% random noise.
+                      <br />
+                      If baseline flow is 100 L/s, the reading might be anywhere from 97 L/s to 103 L/s (100 × 0.97 to 100 × 1.03).
+                      <br />
+                      The noise is uniformly distributed across this range.
+                    </div>
+                    <p><strong>Range:</strong> 0.0 to 50.0% (0.0 = no noise, 50.0 = ±50% noise)</p>
+                    <p><strong>Tip:</strong> Real flow sensors typically have 2-5% noise due to turbulence and measurement challenges.
+                    Default of 3% is realistic. Higher values simulate less accurate sensors or turbulent conditions.</p>
+                  </div>
+
+                  {/* Tank Level Noise */}
+                  <div className="help-section">
+                    <h3>Tank Level Noise (%)</h3>
+                    <p><strong>What it does:</strong> Controls the amount of random noise added to tank level sensor readings. Tank levels are usually more stable than pressure or flow.</p>
+                    <div className="help-example">
+                      <strong>Example:</strong> Setting this to 1.0% means tank level readings will have ±1% random noise.
+                      <br />
+                      If baseline tank level is 10.0 m, the reading might be anywhere from 9.9 m to 10.1 m (10.0 × 0.99 to 10.0 × 1.01).
+                      <br />
+                      Tank levels change slowly, so lower noise is more realistic.
+                    </div>
+                    <p><strong>Range:</strong> 0.0 to 50.0% (0.0 = no noise, 50.0 = ±50% noise)</p>
+                    <p><strong>Tip:</strong> Real tank level sensors are very accurate, typically 0.5-2% noise. Default of 1% is realistic.
+                    Lower values (0.5-1%) = more stable readings. Higher values (3-5%) = more variation, useful for testing.</p>
+                  </div>
                 </div>
               </div>
             </div>
@@ -510,6 +609,7 @@ export function SimulatorPage() {
               <p>Generation Rate: {simulatorStatus.configuration.generation_rate_minutes} minutes</p>
               <p>Data Loss: {(simulatorStatus.configuration.data_loss_proportion * 100).toFixed(0)}% lost, {(100 - simulatorStatus.configuration.data_loss_proportion * 100).toFixed(0)}% kept (variance: {simulatorStatus.configuration.data_loss_variance})</p>
               <p>Delay: {simulatorStatus.configuration.delay_mean} ± {simulatorStatus.configuration.delay_std_dev} (max: {simulatorStatus.configuration.delay_max}) minutes</p>
+              <p>Noise: Pressure {simulatorStatus.configuration.pressure_noise_percent}% | Flow {simulatorStatus.configuration.flow_noise_percent}% | Tank Level {simulatorStatus.configuration.tank_level_noise_percent}%</p>
             </div>
           )}
           

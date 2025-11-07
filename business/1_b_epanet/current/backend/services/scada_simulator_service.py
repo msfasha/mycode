@@ -47,6 +47,9 @@ class SCADASimulator:
         delay_mean: float = 2.5,
         delay_std_dev: float = 2.0,
         delay_max: float = 10.0,
+        pressure_noise_percent: float = 2.0,
+        flow_noise_percent: float = 3.0,
+        tank_level_noise_percent: float = 1.0,
     ):
         """
         Initialize SCADA simulator.
@@ -61,6 +64,12 @@ class SCADASimulator:
             delay_mean: Mean delay for timestamp distribution (minutes)
             delay_std_dev: Standard deviation for delays (minutes)
             delay_max: Maximum delay bound (minutes)
+            pressure_noise_percent: Noise level for pressure sensors as percentage (0.0-50.0)
+                Example: 2.0 means ±2% noise (uniform distribution from -2% to +2%)
+            flow_noise_percent: Noise level for flow sensors as percentage (0.0-50.0)
+                Example: 3.0 means ±3% noise (uniform distribution from -3% to +3%)
+            tank_level_noise_percent: Noise level for tank level sensors as percentage (0.0-50.0)
+                Example: 1.0 means ±1% noise (uniform distribution from -1% to +1%)
         """
         self.network_id = network_id
         self.generation_rate_minutes = generation_rate_minutes
@@ -69,6 +78,9 @@ class SCADASimulator:
         self.delay_mean = delay_mean
         self.delay_std_dev = delay_std_dev
         self.delay_max = delay_max
+        self.pressure_noise_percent = pressure_noise_percent
+        self.flow_noise_percent = flow_noise_percent
+        self.tank_level_noise_percent = tank_level_noise_percent
 
         # Background task
         self.task: Optional[asyncio.Task] = None
@@ -87,6 +99,9 @@ class SCADASimulator:
                 "delay_mean": delay_mean,
                 "delay_std_dev": delay_std_dev,
                 "delay_max": delay_max,
+                "pressure_noise_percent": pressure_noise_percent,
+                "flow_noise_percent": flow_noise_percent,
+                "tank_level_noise_percent": tank_level_noise_percent,
             },
             "current_cycle": {
                 "junctions_selected": 0,
@@ -286,15 +301,18 @@ class SCADASimulator:
         # Get diurnal pattern multiplier
         pattern_multiplier = get_diurnal_multiplier(current_hour)
 
-        # Add noise based on sensor type
+        # Add noise based on sensor type (using configurable noise levels)
         if sensor_type == "pressure":
-            noise = random.uniform(-0.02, 0.02)  # ±2%
+            noise_percent = self.pressure_noise_percent
         elif sensor_type == "flow":
-            noise = random.uniform(-0.03, 0.03)  # ±3%
+            noise_percent = self.flow_noise_percent
         elif sensor_type == "level":
-            noise = random.uniform(-0.01, 0.01)  # ±1%
+            noise_percent = self.tank_level_noise_percent
         else:
-            noise = random.uniform(-0.02, 0.02)  # Default ±2%
+            noise_percent = self.pressure_noise_percent  # Default to pressure noise
+        
+        # Convert percentage to decimal and apply uniform distribution
+        noise = random.uniform(-noise_percent / 100.0, noise_percent / 100.0)
 
         # Calculate reading
         value = baseline * pattern_multiplier * (1 + noise)

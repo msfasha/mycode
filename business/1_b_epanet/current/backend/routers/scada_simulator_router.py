@@ -46,6 +46,15 @@ class StartSimulatorRequest(BaseModel):
     delay_max: float = Field(
         10.0, ge=0.0, description="Maximum delay bound (minutes)"
     )
+    pressure_noise_percent: float = Field(
+        2.0, ge=0.0, le=50.0, description="Noise level for pressure sensors as percentage (0.0 to 50.0). Example: 2.0 means ±2% noise"
+    )
+    flow_noise_percent: float = Field(
+        3.0, ge=0.0, le=50.0, description="Noise level for flow sensors as percentage (0.0 to 50.0). Example: 3.0 means ±3% noise"
+    )
+    tank_level_noise_percent: float = Field(
+        1.0, ge=0.0, le=50.0, description="Noise level for tank level sensors as percentage (0.0 to 50.0). Example: 1.0 means ±1% noise"
+    )
 
 
 class StopSimulatorRequest(BaseModel):
@@ -109,6 +118,9 @@ async def start_simulator(request: StartSimulatorRequest, db: AsyncSession = Dep
             delay_mean=request.delay_mean,
             delay_std_dev=request.delay_std_dev,
             delay_max=request.delay_max,
+            pressure_noise_percent=request.pressure_noise_percent,
+            flow_noise_percent=request.flow_noise_percent,
+            tank_level_noise_percent=request.tank_level_noise_percent,
         )
 
         await _simulator.start()
