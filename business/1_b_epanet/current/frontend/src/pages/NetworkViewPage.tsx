@@ -75,12 +75,6 @@ export function NetworkViewPage() {
       setHighlightSensorType(state.sensorType || null);
       // Clear state after reading to prevent re-highlighting on re-render
       window.history.replaceState({}, document.title);
-      
-      // Clear highlight state after a delay to prevent re-highlighting on overlay redraws
-      setTimeout(() => {
-        setHighlightLocation(null);
-        setHighlightSensorType(null);
-      }, 100);
     }
   }, [location.state]);
   

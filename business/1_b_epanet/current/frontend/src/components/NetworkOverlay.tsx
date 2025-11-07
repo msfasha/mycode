@@ -28,7 +28,6 @@ interface NetworkOverlayProps {
 
 export const NetworkOverlay: React.FC<NetworkOverlayProps> = ({ map, network, anomalies = [], highlightLocation = null, highlightSensorType = null }) => {
   const layersRef = useRef<L.LayerGroup | null>(null);
-  const lastHighlightRef = useRef<string | null>(null); // Track last highlighted location to prevent re-highlighting on redraws
 
   // Helper function to get severity color
   const getSeverityColor = (severity: string): string => {
@@ -302,10 +301,7 @@ export const NetworkOverlay: React.FC<NetworkOverlayProps> = ({ map, network, an
     }
 
     // Handle highlighting when highlightLocation is provided
-    // Only process if this is a new highlight location (not on every redraw)
-    if (highlightLocation && layerGroup && highlightLocation !== lastHighlightRef.current) {
-      lastHighlightRef.current = highlightLocation; // Track that we've processed this location
-      
+    if (highlightLocation && layerGroup) {
       if (highlightSensorType === 'pressure') {
         // Find junction marker
         const marker = layerGroup.getLayers().find((layer) => {
@@ -349,9 +345,6 @@ export const NetworkOverlay: React.FC<NetworkOverlayProps> = ({ map, network, an
           }, 3000);
         }
       }
-    } else if (!highlightLocation) {
-      // Clear the ref when highlight is cleared
-      lastHighlightRef.current = null;
     }
 
     // Cleanup function
