@@ -10,7 +10,7 @@ from fastapi import FastAPI
 from fastapi.middleware.cors import CORSMiddleware
 
 from database import close_db, init_db
-from routers import network, scada_simulator
+from routers import network, scada_simulator_router
 
 # Configure logging
 logging.basicConfig(
@@ -69,7 +69,7 @@ app.add_middleware(
 
 # Include routers
 app.include_router(network.router)
-app.include_router(scada_simulator.router)
+app.include_router(scada_simulator_router.router)
 
 
 @app.get("/")

@@ -14,7 +14,7 @@ from sqlalchemy.ext.asyncio import AsyncSession
 
 from database import get_db
 from models import Network, SCADAGenerationLog, SCADAReading
-from services.scada_simulator import SCADASimulator
+from services.scada_simulator_service import SCADASimulator
 
 logger = logging.getLogger(__name__)
 
