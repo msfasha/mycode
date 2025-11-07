@@ -101,6 +101,19 @@ export class EPANETParser {
     return sectionLines;
   }
 
+  /**
+   * Parse JUNCTIONS section from EPANET .inp file.
+   * 
+   * IMPORTANT: EPANET .inp files can have demands in TWO places:
+   * 1. In the JUNCTIONS section (3rd column) - often set to 0
+   * 2. In a separate [DEMANDS] section - contains the actual demand values
+   * 
+   * This method reads the demand from JUNCTIONS section, but the actual
+   * demands are merged from the DEMANDS section in parseINPFile().
+   * 
+   * Format: ID Elevation Demand Pattern
+   * Example: "29 957 0" (demand is 0, actual demand is in DEMANDS section)
+   */
   private parseJunctions(lines: string[]): Junction[] {
     const sectionLines = this.parseSection('JUNCTIONS', lines);
     return sectionLines.map(line => {
@@ -108,7 +121,7 @@ export class EPANETParser {
       return {
         id: parts[0],
         elevation: parseFloat(parts[1]) || 0,
-        demand: parseFloat(parts[2]) || 0,
+        demand: parseFloat(parts[2]) || 0, // May be 0 if demands are in DEMANDS section
         pattern: parts[3] || undefined
       };
     });
@@ -201,6 +214,19 @@ export class EPANETParser {
     });
   }
 
+  /**
+   * Parse DEMANDS section from EPANET .inp file.
+   * 
+   * IMPORTANT: EPANET .inp files can have demands in TWO places:
+   * 1. In the JUNCTIONS section (3rd column) - often set to 0
+   * 2. In a separate [DEMANDS] section - contains the actual demand values
+   * 
+   * This method reads the DEMANDS section which contains the actual demand values.
+   * These demands are merged into the junctions in parseINPFile().
+   * 
+   * Format: JunctionID Demand Pattern Category
+   * Example: "29 1.37375" (actual demand for junction 29)
+   */
   private parseDemands(lines: string[]): Array<{
     junction: string;
     demand: number;
@@ -224,10 +250,25 @@ export class EPANETParser {
     return titleSection.join(' ').trim() || 'Untitled Network';
   }
 
+  /**
+   * Parse an EPANET .inp file and return a structured network object.
+   * 
+   * IMPORTANT: EPANET .inp files can have demands in TWO places:
+   * 1. In the JUNCTIONS section (3rd column) - often set to 0
+   * 2. In a separate [DEMANDS] section - contains the actual demand values
+   * 
+   * This method handles both cases by:
+   * - Parsing demands from JUNCTIONS section (may be 0)
+   * - Parsing demands from DEMANDS section (actual values)
+   * - Merging DEMANDS section values into junction objects (overwrites JUNCTIONS values)
+   * 
+   * This ensures that junction.demand always contains the correct demand value,
+   * whether it comes from JUNCTIONS or DEMANDS section.
+   */
   public parseINPFile(content: string): ParsedNetwork {
     const lines = content.split('\n');
     
-    return {
+    const parsed = {
       title: this.parseTitle(lines),
       junctions: this.parseJunctions(lines),
       reservoirs: this.parseReservoirs(lines),
@@ -238,6 +279,25 @@ export class EPANETParser {
       coordinates: this.parseCoordinates(lines),
       demands: this.parseDemands(lines)
     };
+    
+    // Merge demands from DEMANDS section into junctions
+    // EPANET files often have demands=0 in JUNCTIONS section, with actual
+    // demands in a separate DEMANDS section. This merge ensures junction.demand
+    // contains the correct value from DEMANDS section if it exists.
+    const demandsMap = new Map<string, number>();
+    parsed.demands.forEach(d => {
+      demandsMap.set(d.junction, d.demand);
+    });
+    
+    // Update junction demands from DEMANDS section (overwrites JUNCTIONS values)
+    parsed.junctions.forEach(junction => {
+      const demandFromSection = demandsMap.get(junction.id);
+      if (demandFromSection !== undefined) {
+        junction.demand = demandFromSection;
+      }
+    });
+    
+    return parsed;
   }
 
   public async parseINPFileFromFile(file: File): Promise<ParsedNetwork> {
